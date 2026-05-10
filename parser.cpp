@@ -11,7 +11,8 @@ static const std::vector<std::string> known_functions = {
     "complex", "re", "im", "conj", "arg", "mod",
     "rand", "randint",
     "convert", "solve",
-    "deg", "rad"
+    "deg", "rad",
+    "vecmod", "dot", "cross", "scalarmul", "mixed", "proj", "decompose"
 };
 
 static bool is_known_function(const std::string& name) {
@@ -315,11 +316,23 @@ ASTPtr Parser::primary() {
     }
     if (check(TokenType::LPAREN)) {
         advance();
-        auto expr = expression();
+        auto first = expression();
+        if (check(TokenType::COMMA)) {
+            std::vector<ASTPtr> components;
+            components.push_back(first);
+            while (check(TokenType::COMMA)) {
+                advance();
+                components.push_back(expression());
+            }
+            if (!match(TokenType::RPAREN)) {
+                throw CalcError("Expected ')' in vector literal");
+            }
+            return ASTNode::make_vec_literal(components);
+        }
         if (!match(TokenType::RPAREN)) {
             throw CalcError("Expected ')'");
         }
-        return expr;
+        return first;
     }
     throw CalcError("Unexpected token: " + peek().text);
 }

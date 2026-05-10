@@ -315,6 +315,10 @@ bool Value::is_zero() const {
     if (type == FLOAT) return float_val.is_zero();
     if (type == COMPLEX)
         return complex.real->is_zero() && complex.imag->is_zero();
+    if (type == VECTOR) {
+        for (auto& c : vec) if (!c.is_zero()) return false;
+        return true;
+    }
     return false;
 }
 
@@ -335,6 +339,15 @@ BigFloat Value::to_float(int prec) const {
 std::string Value::to_string() const {
     if (type == ERROR) return "Error: " + error_msg;
     if (type == STRING) return error_msg;
+    if (type == VECTOR) {
+        std::string r = "(";
+        for (size_t i = 0; i < vec.size(); i++) {
+            if (i > 0) r += ", ";
+            r += vec[i].to_string();
+        }
+        r += ")";
+        return r;
+    }
     if (type == SURDS) {
         if (surds.is_rational()) {
             BigRat r = surds.to_rational();
@@ -366,6 +379,17 @@ std::string Value::to_string() const {
 Value Value::operator+(const Value& o) const {
     if (is_error()) return *this;
     if (o.is_error()) return o;
+    if (type == VECTOR || o.type == VECTOR) {
+        if (type == VECTOR && o.type == VECTOR) {
+            if (vec_dim() != o.vec_dim())
+                return make_error("Vector dimension mismatch in addition");
+            std::vector<Value> result;
+            for (int i = 0; i < vec_dim(); i++)
+                result.push_back(vec[i] + o.vec[i]);
+            return make_vector(result);
+        }
+        return make_error("Cannot add vector and scalar");
+    }
     if (type == COMPLEX || o.type == COMPLEX) {
         Value r1 = type == COMPLEX ? *complex.real : *this;
         Value i1 = type == COMPLEX ? *complex.imag : Value(BigRat(0));
@@ -387,6 +411,17 @@ Value Value::operator+(const Value& o) const {
 Value Value::operator-(const Value& o) const {
     if (is_error()) return *this;
     if (o.is_error()) return o;
+    if (type == VECTOR || o.type == VECTOR) {
+        if (type == VECTOR && o.type == VECTOR) {
+            if (vec_dim() != o.vec_dim())
+                return make_error("Vector dimension mismatch in subtraction");
+            std::vector<Value> result;
+            for (int i = 0; i < vec_dim(); i++)
+                result.push_back(vec[i] - o.vec[i]);
+            return make_vector(result);
+        }
+        return make_error("Cannot subtract vector and scalar");
+    }
     if (type == COMPLEX || o.type == COMPLEX) {
         Value r1 = type == COMPLEX ? *complex.real : *this;
         Value i1 = type == COMPLEX ? *complex.imag : Value(BigRat(0));
@@ -408,6 +443,18 @@ Value Value::operator-(const Value& o) const {
 Value Value::operator*(const Value& o) const {
     if (is_error()) return *this;
     if (o.is_error()) return o;
+    if (type == VECTOR || o.type == VECTOR) {
+        if (type == VECTOR && o.type == VECTOR)
+            return make_error("Use dot(a,b) for dot product");
+        if (type == VECTOR) {
+            std::vector<Value> result;
+            for (auto& c : vec) result.push_back(c * o);
+            return make_vector(result);
+        }
+        std::vector<Value> result;
+        for (auto& c : o.vec) result.push_back(*this * c);
+        return make_vector(result);
+    }
     if (type == COMPLEX || o.type == COMPLEX) {
         Value r1 = type == COMPLEX ? *complex.real : *this;
         Value i1 = type == COMPLEX ? *complex.imag : Value(BigRat(0));
@@ -458,6 +505,11 @@ Value Value::operator/(const Value& o) const {
 
 Value Value::operator-() const {
     if (is_error()) return *this;
+    if (type == VECTOR) {
+        std::vector<Value> result;
+        for (auto& c : vec) result.push_back(-c);
+        return make_vector(result);
+    }
     if (type == COMPLEX) return make_complex(-*complex.real, -*complex.imag);
     if (type == SURDS) return Value(-surds);
     if (type == FLOAT) return Value(-float_val);

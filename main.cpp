@@ -6,7 +6,12 @@
 static bool is_assignable_var(const std::string& name) {
     return name == "x" || name == "y" ||
            name == "A" || name == "B" || name == "C" || name == "D" ||
-           name == "P";
+           name == "P" ||
+           name == "VerA" || name == "VerB" || name == "VerC" || name == "VerD";
+}
+
+static bool is_vec_var(const std::string& name) {
+    return name == "VerA" || name == "VerB" || name == "VerC" || name == "VerD";
 }
 
 static void print_help() {
@@ -16,6 +21,7 @@ static void print_help() {
     std::cout << "Arithmetic:  +  -  *  /  ^  %" << std::endl;
     std::cout << "Constants:   pi, e" << std::endl;
     std::cout << "Variables:   x, y, A, B, C, D (default 0, assign: x=expr)" << std::endl;
+    std::cout << "Vectors:     VerA, VerB, VerC, VerD (default empty, assign: VerA=(1,2,3))" << std::endl;
     std::cout << "Base input:  0b1010(binary) 0o77(octal) 0xFF(hex)" << std::endl;
     std::cout << std::endl;
     std::cout << "Functions:" << std::endl;
@@ -50,6 +56,16 @@ static void print_help() {
     std::cout << "  randint(a, b)                   - Random integer" << std::endl;
     std::cout << "  convert(val, from, to)          - Unit conversion" << std::endl;
     std::cout << std::endl;
+    std::cout << "Vector:" << std::endl;
+    std::cout << "  vecmod(v)                       - Vector magnitude" << std::endl;
+    std::cout << "  dot(a, b)                       - Dot product" << std::endl;
+    std::cout << "  cross(a, b)                     - Cross product (3D)" << std::endl;
+    std::cout << "  scalarmul(s, v)                 - Scalar multiplication" << std::endl;
+    std::cout << "  mixed(a, b, c)                  - Mixed/scalar triple product (3D)" << std::endl;
+    std::cout << "  proj(a, b)                      - Projection of a onto b" << std::endl;
+    std::cout << "  decompose(a, b, c)              - Decompose 2D: a=alpha*b+beta*c" << std::endl;
+    std::cout << "  decompose(a, b, c, d)           - Decompose 3D: a=alpha*b+beta*c+gamma*d" << std::endl;
+    std::cout << std::endl;
     std::cout << "Commands:" << std::endl;
     std::cout << "  deg / rad                       - Set angle mode" << std::endl;
     std::cout << "  base N                          - Set output base (2-36)" << std::endl;
@@ -69,6 +85,9 @@ static void print_help() {
     std::cout << "  x=pi, sin(x/2)   => 1" << std::endl;
     std::cout << "  0xFF             => 255" << std::endl;
     std::cout << "  base 16, 255     => FF" << std::endl;
+    std::cout << "  VerA=(1,2,3)     => (1, 2, 3)" << std::endl;
+    std::cout << "  vecmod(VerA)      => sqrt(14)" << std::endl;
+    std::cout << "  dot(VerA,VerB)    => dot product" << std::endl;
 }
 
 static std::string trim(const std::string& s) {
@@ -170,7 +189,11 @@ int main() {
                         if (result.is_error()) {
                             std::cout << result.to_string() << std::endl;
                         } else {
-                            evaluator.set_variable(var_name, result);
+                            if (is_vec_var(var_name)) {
+                                evaluator.set_vec_variable(var_name, result);
+                            } else {
+                                evaluator.set_variable(var_name, result);
+                            }
                             std::cout << var_name << " = "
                                       << Evaluator::format_result(result, evaluator.output_base())
                                       << std::endl;

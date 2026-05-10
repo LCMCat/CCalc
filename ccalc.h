@@ -261,13 +261,14 @@ struct ComplexVal {
 
 class Value {
 public:
-    enum Type { SURDS, FLOAT, COMPLEX, STRING, ERROR };
+    enum Type { SURDS, FLOAT, COMPLEX, VECTOR, STRING, ERROR };
 
     Type type;
 
     SurdsExpr surds;
     BigFloat float_val;
     ComplexVal complex;
+    std::vector<Value> vec;
     std::string error_msg;
 
     Value() : type(SURDS), surds(BigRat(0)) {}
@@ -289,13 +290,22 @@ public:
         return v;
     }
     static Value make_complex(const Value& r, const Value& i);
+    static Value make_vector(const std::vector<Value>& components) {
+        Value v;
+        v.type = VECTOR;
+        v.vec = components;
+        return v;
+    }
 
     bool is_error() const { return type == ERROR; }
     bool is_string() const { return type == STRING; }
     bool is_exact() const;
     bool is_rational() const;
     bool is_complex() const { return type == COMPLEX; }
+    bool is_vector() const { return type == VECTOR; }
     bool is_zero() const;
+
+    int vec_dim() const { return is_vector() ? (int)vec.size() : 0; }
 
     BigRat to_rational() const;
     BigFloat to_float(int prec = 0) const;
@@ -351,7 +361,7 @@ using ASTPtr = std::shared_ptr<ASTNode>;
 
 struct ASTNode {
     enum Type {
-        NUMBER, CONSTANT, VARIABLE, BINOP, UNARYOP, FUNCTION, FACTORIAL
+        NUMBER, CONSTANT, VARIABLE, BINOP, UNARYOP, FUNCTION, FACTORIAL, VEC_LITERAL
     };
 
     Type type;
@@ -408,6 +418,12 @@ struct ASTNode {
         p->left = std::move(operand);
         return p;
     }
+    static ASTPtr make_vec_literal(std::vector<ASTPtr> components) {
+        auto p = std::make_shared<ASTNode>();
+        p->type = VEC_LITERAL;
+        p->args = std::move(components);
+        return p;
+    }
 };
 
 class Parser {
@@ -445,6 +461,10 @@ public:
         variables_["B"] = Value(BigRat(0));
         variables_["C"] = Value(BigRat(0));
         variables_["D"] = Value(BigRat(0));
+        vec_variables_["VerA"] = Value::make_vector({});
+        vec_variables_["VerB"] = Value::make_vector({});
+        vec_variables_["VerC"] = Value::make_vector({});
+        vec_variables_["VerD"] = Value::make_vector({});
     }
 
     enum AngleMode { DEG, RAD };
@@ -458,6 +478,10 @@ public:
     void set_variable(const std::string& name, const Value& v);
     Value get_variable(const std::string& name) const;
 
+    void set_vec_variable(const std::string& name, const Value& v);
+    Value get_vec_variable(const std::string& name) const;
+    bool has_vec_variable(const std::string& name) const;
+
     void set_output_base(int b) { output_base_ = b; }
     int output_base() const { return output_base_; }
 
@@ -469,6 +493,7 @@ private:
     AngleMode angle_mode_;
     int output_base_;
     std::map<std::string, Value> variables_;
+    std::map<std::string, Value> vec_variables_;
     Value last_ans_;
 
     Value eval_node(ASTPtr node);
@@ -516,6 +541,15 @@ private:
     Value eval_randint(const Value& a, const Value& b);
     Value eval_convert(const Value& v, const std::string& from, const std::string& to);
     Value eval_solve_ineq(ASTPtr node);
+
+    Value eval_vecmod(const Value& v);
+    Value eval_dot(const Value& a, const Value& b);
+    Value eval_cross(const Value& a, const Value& b);
+    Value eval_scalarmul(const Value& s, const Value& v);
+    Value eval_mixed(const Value& a, const Value& b, const Value& c);
+    Value eval_proj(const Value& a, const Value& b);
+    Value eval_decompose(const Value& a, const Value& b, const Value& c);
+    Value eval_decompose3d(const Value& a, const Value& b, const Value& c, const Value& d);
 
     Value try_exact_trig(const BigRat& pi_coeff, int func);
     Value substitute(ASTPtr node, const std::string& var, const Value& val);

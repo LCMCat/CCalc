@@ -20,6 +20,21 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 - Assignment: `x=1`, `x=sin(pi/2)`, `A=10`
 - Usage in expressions: `sin(x/2)` when `x=pi` → `1`
 
+### Vectors
+- `VerA`, `VerB`, `VerC`, `VerD` — user-assignable vector variables (default: empty)
+- Assignment: `VerA=(1,2,3)`, `VerB=(1,2)`
+- Vector literals: `(1,2,3)` — 3D vector, `(3,4)` — 2D vector
+- Arithmetic: `VerA+VerB`, `VerA-VerB`, `3*VerA`, `-VerA` (same dimension required for ±)
+- Operations:
+  - `vecmod(v)` — magnitude: `vecmod((3,4))` → `5`
+  - `dot(a, b)` — dot product (same dimension required)
+  - `cross(a, b)` — cross product (3D only)
+  - `scalarmul(s, v)` — scalar multiplication (also `s*v` or `v*s`)
+  - `mixed(a, b, c)` — scalar triple product a·(b×c) (3D only)
+  - `proj(a, b)` — projection of a onto b
+  - `decompose(a, b, c)` — 2D decomposition: a = αb + βc, returns (α, β)
+  - `decompose(a, b, c, d)` — 3D decomposition: a = αb + βc + γd, returns (α, β, γ)
+
 ### Number Bases
 - Input prefixes: `0b1010` (binary), `0o77` (octal), `0xFF` (hex)
 - Output base: `base 2` / `base 8` / `base 16` / `base N` (2–36)
@@ -91,6 +106,11 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 | `0xFF` | `255` |
 | `0b1010` | `10` |
 | `base 16; 255` | `FF` |
+| `VerA=(1,2,3)` | `(1, 2, 3)` |
+| `vecmod((3,4))` | `5` |
+| `dot((1,2),(3,4))` | `11` |
+| `cross((1,0,0),(0,1,0))` | `(0, 0, 1)` |
+| `decompose((1,1),(1,0),(0,1))` | `(1, 1)` |
 
 ## Build
 
@@ -144,6 +164,18 @@ CCalc> base 16
 Output base set to 16
 CCalc> 255
 FF
+CCalc> VerA=(1,2,3)
+VerA = (1, 2, 3)
+CCalc> vecmod(VerA)
+sqrt(14) ~= 3.74165738677394138558374873231654930176
+CCalc> dot(VerA,(4,5,6))
+32
+CCalc> cross(VerA,(4,5,6))
+(-3, 6, -3)
+CCalc> 3*VerA
+(3, 6, 9)
+CCalc> proj((1,2),(3,4))
+(33/25 (= 1.32), 44/25 (= 1.76))
 CCalc> quit
 Goodbye!
 ```
@@ -177,7 +209,7 @@ Goodbye!
 | `BigRat` | Arbitrary-precision rational (auto-simplified) |
 | `BigFloat` | Arbitrary-precision float (scientific notation) |
 | `SurdsExpr` | Exact symbolic expression (radicals + π + e) |
-| `Value` | Discriminated union: SURDS / FLOAT / COMPLEX / STRING / ERROR |
+| `Value` | Discriminated union: SURDS / FLOAT / COMPLEX / VECTOR / STRING / ERROR |
 
 ### Key Design Decisions
 

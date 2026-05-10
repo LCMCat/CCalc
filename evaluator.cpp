@@ -22,7 +22,23 @@ Value Evaluator::get_variable(const std::string& name) const {
     if (name == "ans") return last_ans_;
     auto it = variables_.find(name);
     if (it != variables_.end()) return it->second;
+    auto vit = vec_variables_.find(name);
+    if (vit != vec_variables_.end()) return vit->second;
     throw CalcError("Undefined variable: " + name);
+}
+
+void Evaluator::set_vec_variable(const std::string& name, const Value& v) {
+    vec_variables_[name] = v;
+}
+
+Value Evaluator::get_vec_variable(const std::string& name) const {
+    auto it = vec_variables_.find(name);
+    if (it != vec_variables_.end()) return it->second;
+    return Value::make_vector({});
+}
+
+bool Evaluator::has_vec_variable(const std::string& name) const {
+    return vec_variables_.find(name) != vec_variables_.end();
 }
 
 Value Evaluator::eval_node(ASTPtr node) {
@@ -47,6 +63,15 @@ Value Evaluator::eval_node(ASTPtr node) {
         return eval_function(node);
     case ASTNode::FACTORIAL:
         return eval_factorial(node);
+    case ASTNode::VEC_LITERAL: {
+        std::vector<Value> components;
+        for (auto& arg : node->args) {
+            Value v = eval_node(arg);
+            if (v.is_error()) return v;
+            components.push_back(v);
+        }
+        return Value::make_vector(components);
+    }
     }
     return Value::make_error("Unknown node type");
 }
@@ -734,6 +759,15 @@ Value Evaluator::substitute(ASTPtr node, const std::string& var, const Value& va
     }
     case ASTNode::FACTORIAL:
         return eval_fact(substitute(node->left, var, val));
+    case ASTNode::VEC_LITERAL: {
+        std::vector<Value> components;
+        for (auto& arg : node->args) {
+            Value v = substitute(arg, var, val);
+            if (v.is_error()) return v;
+            components.push_back(v);
+        }
+        return Value::make_vector(components);
+    }
     }
     return Value::make_error("Cannot substitute");
 }
@@ -1292,12 +1326,179 @@ Value Evaluator::eval_function(ASTPtr node) {
         return Value(BigFloat::sqrt_val(
             a.to_float() * a.to_float() + b.to_float() * b.to_float()));
     }
+    if (name == "vecmod") {
+        if (args.size() != 1) return Value::make_error("vecmod requires 1 argument");
+        return eval_vecmod(eval_node(args[0]));
+    }
+    if (name == "dot") {
+        if (args.size() != 2) return Value::make_error("dot requires 2 arguments");
+        return eval_dot(eval_node(args[0]), eval_node(args[1]));
+    }
+    if (name == "cross") {
+        if (args.size() != 2) return Value::make_error("cross requires 2 arguments");
+        return eval_cross(eval_node(args[0]), eval_node(args[1]));
+    }
+    if (name == "scalarmul") {
+        if (args.size() != 2) return Value::make_error("scalarmul requires 2 arguments");
+        return eval_scalarmul(eval_node(args[0]), eval_node(args[1]));
+    }
+    if (name == "mixed") {
+        if (args.size() != 3) return Value::make_error("mixed requires 3 arguments");
+        return eval_mixed(eval_node(args[0]), eval_node(args[1]), eval_node(args[2]));
+    }
+    if (name == "proj") {
+        if (args.size() != 2) return Value::make_error("proj requires 2 arguments");
+        return eval_proj(eval_node(args[0]), eval_node(args[1]));
+    }
+    if (name == "decompose") {
+        if (args.size() == 3)
+            return eval_decompose(eval_node(args[0]), eval_node(args[1]), eval_node(args[2]));
+        if (args.size() == 4)
+            return eval_decompose3d(eval_node(args[0]), eval_node(args[1]), eval_node(args[2]), eval_node(args[3]));
+        return Value::make_error("decompose requires 3 or 4 arguments");
+    }
     return Value::make_error("Unknown function: " + name);
+}
+
+Value Evaluator::eval_vecmod(const Value& v) {
+    if (!v.is_vector())
+        return Value::make_error("vecmod requires a vector");
+    if (v.vec_dim() == 0)
+        return Value::make_error("vecmod: empty vector");
+    Value sum(BigRat(0));
+    for (auto& c : v.vec) {
+        sum = sum + c * c;
+    }
+    return eval_sqrt(sum);
+}
+
+Value Evaluator::eval_dot(const Value& a, const Value& b) {
+    if (!a.is_vector() || !b.is_vector())
+        return Value::make_error("dot requires two vectors");
+    if (a.vec_dim() != b.vec_dim())
+        return Value::make_error("dot: vectors must have same dimension");
+    if (a.vec_dim() == 0)
+        return Value::make_error("dot: empty vectors");
+    Value sum(BigRat(0));
+    for (int i = 0; i < a.vec_dim(); i++) {
+        sum = sum + a.vec[i] * b.vec[i];
+    }
+    return sum;
+}
+
+Value Evaluator::eval_cross(const Value& a, const Value& b) {
+    if (!a.is_vector() || !b.is_vector())
+        return Value::make_error("cross requires two vectors");
+    if (a.vec_dim() != 3 || b.vec_dim() != 3)
+        return Value::make_error("cross product requires 3D vectors");
+    Value c1 = a.vec[1] * b.vec[2] - a.vec[2] * b.vec[1];
+    Value c2 = a.vec[2] * b.vec[0] - a.vec[0] * b.vec[2];
+    Value c3 = a.vec[0] * b.vec[1] - a.vec[1] * b.vec[0];
+    return Value::make_vector({c1, c2, c3});
+}
+
+Value Evaluator::eval_scalarmul(const Value& s, const Value& v) {
+    if (!v.is_vector())
+        return Value::make_error("scalarmul requires a scalar and a vector");
+    if (v.vec_dim() == 0)
+        return Value::make_error("scalarmul: empty vector");
+    return s * v;
+}
+
+Value Evaluator::eval_mixed(const Value& a, const Value& b, const Value& c) {
+    if (!a.is_vector() || !b.is_vector() || !c.is_vector())
+        return Value::make_error("mixed requires three vectors");
+    if (a.vec_dim() != 3 || b.vec_dim() != 3 || c.vec_dim() != 3)
+        return Value::make_error("mixed product requires 3D vectors");
+    Value cp = eval_cross(b, c);
+    if (cp.is_error()) return cp;
+    return eval_dot(a, cp);
+}
+
+Value Evaluator::eval_proj(const Value& a, const Value& b) {
+    if (!a.is_vector() || !b.is_vector())
+        return Value::make_error("proj requires two vectors");
+    if (a.vec_dim() != b.vec_dim())
+        return Value::make_error("proj: vectors must have same dimension");
+    if (b.is_zero())
+        return Value::make_error("proj: cannot project onto zero vector");
+    if (a.vec_dim() == 0)
+        return Value::make_error("proj: empty vectors");
+    Value d = eval_dot(a, b);
+    if (d.is_error()) return d;
+    Value bb = eval_dot(b, b);
+    if (bb.is_error()) return bb;
+    Value coeff = d / bb;
+    return eval_scalarmul(coeff, b);
+}
+
+Value Evaluator::eval_decompose(const Value& a, const Value& b, const Value& c) {
+    if (!a.is_vector() || !b.is_vector() || !c.is_vector())
+        return Value::make_error("decompose requires vectors");
+    if (a.vec_dim() != b.vec_dim() || b.vec_dim() != c.vec_dim())
+        return Value::make_error("decompose: vectors must have same dimension");
+    if (b.is_zero() || c.is_zero())
+        return Value::make_error("decompose: basis vectors cannot be zero");
+
+    if (a.vec_dim() == 2) {
+        Value det = b.vec[0] * c.vec[1] - b.vec[1] * c.vec[0];
+        if (det.is_zero())
+            return Value::make_error("decompose: basis vectors are collinear");
+        Value alpha = (a.vec[0] * c.vec[1] - a.vec[1] * c.vec[0]) / det;
+        Value beta = (b.vec[0] * a.vec[1] - b.vec[1] * a.vec[0]) / det;
+        return Value::make_vector({alpha, beta});
+    }
+
+    if (a.vec_dim() == 3)
+        return Value::make_error("decompose: for 3D, use decompose(a, b, c, d) with 3 basis vectors");
+
+    return Value::make_error("decompose: only 2D and 3D vectors supported");
+}
+
+Value Evaluator::eval_decompose3d(const Value& a, const Value& b, const Value& c, const Value& d) {
+    if (!a.is_vector() || !b.is_vector() || !c.is_vector() || !d.is_vector())
+        return Value::make_error("decompose requires vectors");
+    if (a.vec_dim() != b.vec_dim() || b.vec_dim() != c.vec_dim() || c.vec_dim() != d.vec_dim())
+        return Value::make_error("decompose: vectors must have same dimension");
+    if (a.vec_dim() != 3)
+        return Value::make_error("decompose3d requires 3D vectors");
+
+    Value det = b.vec[0] * (c.vec[1] * d.vec[2] - c.vec[2] * d.vec[1])
+              - c.vec[0] * (b.vec[1] * d.vec[2] - b.vec[2] * d.vec[1])
+              + d.vec[0] * (b.vec[1] * c.vec[2] - b.vec[2] * c.vec[1]);
+    if (det.is_zero())
+        return Value::make_error("decompose: basis vectors are coplanar");
+
+    Value da = a.vec[0] * (c.vec[1] * d.vec[2] - c.vec[2] * d.vec[1])
+             - c.vec[0] * (a.vec[1] * d.vec[2] - a.vec[2] * d.vec[1])
+             + d.vec[0] * (a.vec[1] * c.vec[2] - a.vec[2] * c.vec[1]);
+
+    Value db = b.vec[0] * (a.vec[1] * d.vec[2] - a.vec[2] * d.vec[1])
+             - a.vec[0] * (b.vec[1] * d.vec[2] - b.vec[2] * d.vec[1])
+             + d.vec[0] * (b.vec[1] * a.vec[2] - b.vec[2] * a.vec[1]);
+
+    Value dc = b.vec[0] * (c.vec[1] * a.vec[2] - c.vec[2] * a.vec[1])
+             - c.vec[0] * (b.vec[1] * a.vec[2] - b.vec[2] * a.vec[1])
+             + a.vec[0] * (b.vec[1] * c.vec[2] - b.vec[2] * c.vec[1]);
+
+    Value alpha = da / det;
+    Value beta = db / det;
+    Value gamma = dc / det;
+    return Value::make_vector({alpha, beta, gamma});
 }
 
 std::string Evaluator::format_result(const Value& v, int base) {
     if (v.is_error()) return v.to_string();
     if (v.is_string()) return v.to_string();
+    if (v.is_vector()) {
+        std::string r = "(";
+        for (size_t i = 0; i < v.vec.size(); i++) {
+            if (i > 0) r += ", ";
+            r += format_result(v.vec[i], base);
+        }
+        r += ")";
+        return r;
+    }
     if (v.type == Value::SURDS) {
         if (v.surds.is_rational()) {
             BigRat r = v.surds.to_rational();

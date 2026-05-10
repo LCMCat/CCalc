@@ -128,7 +128,7 @@ CCalc/
 **类型枚举**：
 
 ```cpp
-enum Type { SURDS, FLOAT, COMPLEX, STRING, ERROR };
+enum Type { SURDS, FLOAT, COMPLEX, VECTOR, STRING, ERROR };
 ```
 
 | 类型 | 用途 | 存储字段 |
@@ -136,12 +136,14 @@ enum Type { SURDS, FLOAT, COMPLEX, STRING, ERROR };
 | SURDS | 精确值（有理数/根式/π/e） | `surds: SurdsExpr` |
 | FLOAT | 浮点近似值 | `float_val: BigFloat` |
 | COMPLEX | 复数 | `complex: ComplexVal` |
+| VECTOR | 向量 | `vec: vector<Value>` |
 | STRING | 字符串（因数分解结果） | `error_msg: string` |
 | ERROR | 错误信息 | `error_msg: string` |
 
 **类型提升规则**：
 - SURDS ⊕ FLOAT → FLOAT
 - SURDS/FLOAT ⊕ COMPLEX → COMPLEX
+- VECTOR ⊕ VECTOR → VECTOR（同维度加减、标量乘法）
 - 任何 ⊕ ERROR → ERROR
 
 **ComplexVal**：`shared_ptr<Value> real, imag`，支持任意精度的实部和虚部。
@@ -190,11 +192,12 @@ END_OF_INPUT, ERROR
 ```
 NUMBER     — 数值字面量 (BigRat)
 CONSTANT   — 常量 (pi, e)
-VARIABLE   — 变量 (x, k, ans)
+VARIABLE   — 变量 (x, k, ans, VerA, VerB, VerC, VerD)
 BINOP      — 二元运算 (+, -, *, /, ^, %)
 UNARYOP    — 一元运算 (-)
 FUNCTION   — 函数调用 (sin, cos, ...)
 FACTORIAL  — 阶乘后缀 (n!)
+VEC_LITERAL — 向量字面量 ((1,2,3))
 ```
 
 **已知函数列表**：50+ 个内置函数名，用于区分函数调用和变量名乘法。
@@ -316,6 +319,82 @@ f'(x) ≈ [-f(x-2h) + 8f(x-h) - 8f(x+h) + f(x+2h)] / (12h)
 | `base 4; 15` | `33` |
 | `base 36; 35` | `Z` |
 
+### 5.7 向量系统
+
+**向量变量**：`VerA`, `VerB`, `VerC`, `VerD`，默认为空向量（0维）。
+
+**赋值语法**：`VerA=(1,2,3)`，`VerB=(1,2)`
+
+**存储方式**：`Value::vec` 为 `std::vector<Value>`，每个元素是一个 Value（可以是 SURDS、FLOAT 等任意类型）。
+
+**向量字面量解析**：Parser 的 `primary()` 函数检测 `(expr, expr, ...)` 语法，当括号内第一个表达式后紧跟逗号时，解析为 `VEC_LITERAL` AST 节点，而非分组括号。
+
+**维度约束**：
+- 向量加法/减法要求两个向量维度相同，否则返回错误
+- 点积要求两个向量维度相同
+- 叉积仅支持3D向量
+- 混合积仅支持3D向量
+- 向量与标量的加减返回错误（类型不匹配）
+- 向量与向量的乘法返回错误（应使用 `dot()` 函数）
+
+**向量算术运算**（在 `Value` 运算符重载中实现）：
+
+| 运算 | 语法 | 实现 |
+|------|------|------|
+| 加法 | `VerA+VerB` | 逐分量相加，维度必须相同 |
+| 减法 | `VerA-VerB` | 逐分量相减，维度必须相同 |
+| 标量乘法 | `3*VerA` 或 `VerA*3` | 标量与每个分量相乘 |
+| 取负 | `-VerA` | 每个分量取负 |
+
+**向量函数**：
+
+| 函数 | 签名 | 算法 | 约束 |
+|------|------|------|------|
+| `vecmod(v)` | 1个向量 | \|v\| = √(v₁²+v₂²+...+vₙ²)，调用 `eval_sqrt` | 非空向量 |
+| `dot(a, b)` | 2个向量 | Σaᵢbᵢ | 同维度，非空 |
+| `cross(a, b)` | 2个向量 | (a₂b₃-a₃b₂, a₃b₁-a₁b₃, a₁b₂-a₂b₁) | 仅3D |
+| `scalarmul(s, v)` | 标量+向量 | s×v（逐分量乘法） | 非空向量 |
+| `mixed(a, b, c)` | 3个向量 | a·(b×c) = dot(a, cross(b, c)) | 仅3D |
+| `proj(a, b)` | 2个向量 | (a·b / b·b) × b | 同维度，b≠0 |
+| `decompose(a, b, c)` | 3个向量（2D） | Cramer 法则解 a=αb+βc | 2D，b,c 非零且不共线 |
+| `decompose(a, b, c, d)` | 4个向量（3D） | Cramer 法则解 a=αb+βc+γd | 3D，b,c,d 不共面 |
+
+**向量分解算法**：
+
+2D 分解（平面向量基本定理）：给定向量 a 和两个不共线的基向量 b、c，求解 a = αb + βc。
+
+```
+| a₁ |   | b₁  c₁ | | α |       det = b₁c₂ - b₂c₁
+| a₂ | = | b₂  c₂ | | β |       α = (a₁c₂ - a₂c₁) / det
+                                    β = (b₁a₂ - b₂a₁) / det
+```
+
+3D 分解（空间向量基本定理）：给定向量 a 和三个不共面的基向量 b、c、d，求解 a = αb + βc + γd。
+
+使用 Cramer 法则，计算 3×3 行列式：
+
+```
+det = b₁(c₂d₃-c₃d₂) - c₁(b₂d₃-b₃d₂) + d₁(b₂c₃-b₃c₂)
+```
+
+将 a 分别替换对应列得到 det_a、det_b、det_c，则 α = det_a/det，β = det_b/det，γ = det_c/det。
+
+**错误处理**：
+- 维度不匹配："Vector dimension mismatch in addition/subtraction"
+- 向量与标量运算："Cannot add/subtract vector and scalar"
+- 向量×向量："Use dot(a,b) for dot product"
+- 零向量基："basis vectors cannot be zero"
+- 共线基向量："basis vectors are collinear"
+- 共面基向量（3D）："basis vectors are coplanar"
+- 叉积非3D："cross product requires 3D vectors"
+- 投影到零向量："cannot project onto zero vector"
+
+**向量变量与标量变量的分离存储**：
+- 标量变量存储在 `Evaluator::variables_`（`map<string, Value>`）
+- 向量变量存储在 `Evaluator::vec_variables_`（`map<string, Value>`）
+- `get_variable()` 同时查找两个映射表，优先查找标量变量
+- REPL 赋值时通过 `is_vec_var()` 判断使用 `set_variable()` 还是 `set_vec_variable()`
+
 ## 6. 输出格式化
 
 `format_result()` 根据值类型选择最优显示：
@@ -329,6 +408,7 @@ f'(x) ≈ [-f(x-2h) + 8f(x-h) - 8f(x+h) + f(x+2h)] / (12h)
 | 含 e | 精确形式 + 近似值 | `e ~= 2.718...` |
 | 纯浮点 | 小数 | `3.14159...` |
 | 复数 | a + bi | `3 + 4*i` |
+| 向量 | (分量, 分量, ...) | `(1, 2, 3)` |
 | 错误 | Error: 信息 | `Error: Division by zero` |
 | 字符串 | 原始文本 | `2^3 * 3^2 * 5` |
 
