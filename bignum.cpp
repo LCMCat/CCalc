@@ -584,7 +584,7 @@ BigFloat::BigFloat(double n) {
     int64_t e = std::stoll(s.substr(e_pos + 1));
     mantissa_str.erase(std::remove(mantissa_str.begin(), mantissa_str.end(), '.'), mantissa_str.end());
     mantissa_ = BigInt(mantissa_str);
-    exp_ = e - 17 + 1;
+    exp_ = e - 17;
     normalize();
 }
 

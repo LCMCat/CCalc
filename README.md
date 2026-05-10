@@ -81,6 +81,12 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 - `randint(a, b)` — random integer
 - `convert(val, from, to)` — unit conversion (length, mass, time, area, volume, speed, data, temperature)
 
+### Equation Solving
+- `solve(a, b, c)` — quadratic ax²+bx+c=0 (**exact radical solutions**)
+- `solve(a, b, c, d)` — cubic ax³+bx²+cx+d=0 (Cardano's formula)
+- `solve(a, b, c, d, e)` — quartic ax⁴+bx³+cx²+dx+e=0 (Ferrari's method)
+- Complex roots supported: `solve(1,0,1)` → `(i, -i)`
+
 ## Exact Value Examples
 
 | Input | Output |
@@ -113,6 +119,10 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 | `cross((1,0,0),(0,1,0))` | `(0, 0, 1)` |
 | `decompose((1,1),(1,0),(0,1))` | `(1, 1)` |
 | `x=1, x+1, 2/2, 1-2*5` | `1`, `2`, `1`, `-9` |
+| `solve(1,2,1)` | `(-1, -1)` |
+| `solve(1,-1,-1)` | `(sqrt(5)/2+1/2, -sqrt(5)/2+1/2)` |
+| `solve(1,0,0,-1)` | `(1, -0.5+0.866i, -0.5-0.866i)` |
+| `solve(1,0,1)` | `(i, -i)` |
 
 ## Build
 
@@ -187,6 +197,12 @@ CCalc> sin(pi/2), cos(pi/3), log(2,8)
 1
 1/2 (= 0.5)
 3
+CCalc> solve(1,2,1)
+(-1, -1)
+CCalc> solve(1,-1,-1)
+(sqrt(5)/2 + 1/2 ~= 1.618..., -sqrt(5)/2 + 1/2 ~= -0.618...)
+CCalc> solve(1,0,1)
+(i, -i)
 CCalc> quit
 Goodbye!
 ```

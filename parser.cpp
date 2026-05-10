@@ -12,7 +12,8 @@ static const std::vector<std::string> known_functions = {
     "rand", "randint",
     "convert", "solve",
     "deg", "rad",
-    "vecmod", "dot", "cross", "scalarmul", "mixed", "proj", "decompose"
+    "vecmod", "dot", "cross", "scalarmul", "mixed", "proj", "decompose",
+    "solve"
 };
 
 static bool is_known_function(const std::string& name) {

@@ -548,7 +548,6 @@ private:
     Value eval_rand();
     Value eval_randint(const Value& a, const Value& b);
     Value eval_convert(const Value& v, const std::string& from, const std::string& to);
-    Value eval_solve_ineq(ASTPtr node);
 
     Value eval_vecmod(const Value& v);
     Value eval_dot(const Value& a, const Value& b);
@@ -558,6 +557,9 @@ private:
     Value eval_proj(const Value& a, const Value& b);
     Value eval_decompose(const Value& a, const Value& b, const Value& c);
     Value eval_decompose3d(const Value& a, const Value& b, const Value& c, const Value& d);
+
+    Value eval_solve(const std::vector<ASTPtr>& args);
+    Value eval_solve_quadratic(const Value& a, const Value& b, const Value& c);
 
     Value try_exact_trig(const BigRat& pi_coeff, int func);
     Value substitute(ASTPtr node, const std::string& var, const Value& val);

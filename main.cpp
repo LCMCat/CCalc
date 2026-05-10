@@ -65,6 +65,10 @@ static void print_help() {
     std::cout << "  proj(a, b)                      - Projection of a onto b" << std::endl;
     std::cout << "  decompose(a, b, c)              - Decompose 2D: a=alpha*b+beta*c" << std::endl;
     std::cout << "  decompose(a, b, c, d)           - Decompose 3D: a=alpha*b+beta*c+gamma*d" << std::endl;
+    std::cout << "Equation:" << std::endl;
+    std::cout << "  solve(a,b,c)                    - Quadratic: ax^2+bx+c=0 (exact)" << std::endl;
+    std::cout << "  solve(a,b,c,d)                  - Cubic: ax^3+bx^2+cx+d=0" << std::endl;
+    std::cout << "  solve(a,b,c,d,e)                - Quartic: ax^4+bx^3+cx^2+dx+e=0" << std::endl;
     std::cout << std::endl;
     std::cout << "Commands:" << std::endl;
     std::cout << "  deg / rad                       - Set angle mode" << std::endl;

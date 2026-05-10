@@ -1,4 +1,106 @@
 #include "ccalc.h"
+#include <complex>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+static Value complex_to_value(const std::complex<double>& z) {
+    if (fabs(z.imag()) < 1e-10) {
+        return Value(BigFloat(z.real()));
+    }
+    return Value::make_complex(Value(BigFloat(z.real())), Value(BigFloat(z.imag())));
+}
+
+static std::vector<std::complex<double>> solve_quad_d(double a, double b, double c) {
+    double D = b * b - 4 * a * c;
+    if (D >= 0) {
+        double sq = sqrt(D);
+        return {{(-b + sq) / (2 * a)}, {(-b - sq) / (2 * a)}};
+    }
+    double sq = sqrt(-D);
+    return {{-b / (2 * a), sq / (2 * a)}, {-b / (2 * a), -sq / (2 * a)}};
+}
+
+static std::vector<std::complex<double>> solve_cubic_d(double a, double b,
+                                                        double c, double d) {
+    if (fabs(a) < 1e-15) return solve_quad_d(b, c, d);
+    double p = (3 * a * c - b * b) / (3 * a * a);
+    double q = (2 * b * b * b - 9 * a * b * c + 27 * a * a * d) / (27 * a * a * a);
+    double sh = -b / (3 * a);
+    double Q = p * p * p / 27 + q * q / 4;
+    if (Q > 1e-14) {
+        double sq = sqrt(Q);
+        double al = cbrt(-q / 2 + sq);
+        double be = cbrt(-q / 2 - sq);
+        std::complex<double> w(-0.5, sqrt(3.0) / 2);
+        return {al + be + sh, w * al + std::conj(w) * be + sh,
+                std::conj(w) * al + w * be + sh};
+    }
+    if (Q < -1e-14) {
+        double mp = -p;
+        double m = 2 * sqrt(mp / 3);
+        double arg = -3 * q * sqrt(3.0) / (2 * pow(mp, 1.5));
+        if (arg > 1.0) arg = 1.0;
+        if (arg < -1.0) arg = -1.0;
+        double th = acos(arg) / 3;
+        return {m * cos(th) + sh, m * cos(th - 2 * M_PI / 3) + sh,
+                m * cos(th - 4 * M_PI / 3) + sh};
+    }
+    double u = cbrt(-q / 2);
+    return {2 * u + sh, -u + sh, -u + sh};
+}
+
+static std::vector<std::complex<double>> solve_quartic_d(double a, double b,
+                                                          double c, double d,
+                                                          double e) {
+    if (fabs(a) < 1e-15) return solve_cubic_d(b, c, d, e);
+    double sh = -b / (4 * a);
+    double aa = a;
+    b /= aa; c /= aa; d /= aa; e /= aa;
+    double p = c - 3 * b * b / 8;
+    double q = b * b * b / 8 - b * c / 2 + d;
+    double r = -3 * b * b * b * b / 256 + b * b * c / 16 - b * d / 4 + e;
+    if (fabs(q) < 1e-14) {
+        auto zr = solve_quad_d(1, p, r);
+        std::vector<std::complex<double>> roots;
+        for (auto& z : zr) {
+            roots.push_back(sqrt(z));
+            roots.push_back(-sqrt(z));
+        }
+        for (auto& rt : roots) rt += sh;
+        return roots;
+    }
+    auto sr = solve_cubic_d(8, -4 * p, -8 * r, 4 * p * r - q * q);
+    double s = 0;
+    double mi = 1e30;
+    for (auto& rt : sr) {
+        if (fabs(rt.imag()) < mi) {
+            mi = fabs(rt.imag());
+            s = rt.real();
+        }
+    }
+    double t2 = 2 * s - p;
+    std::vector<std::complex<double>> roots;
+    if (t2 >= 0) {
+        double t = sqrt(t2);
+        double u = -q / (2 * t);
+        auto q1 = solve_quad_d(1, t, s + u);
+        auto q2 = solve_quad_d(1, -t, s - u);
+        for (auto& r : q1) roots.push_back(r + sh);
+        for (auto& r : q2) roots.push_back(r + sh);
+    } else {
+        std::complex<double> tc = sqrt(std::complex<double>(t2));
+        std::complex<double> uc = -q / (2.0 * tc);
+        std::complex<double> sqD1 = sqrt(tc * tc - 4.0 * (s + uc));
+        std::complex<double> sqD2 = sqrt(tc * tc - 4.0 * (s - uc));
+        roots.push_back((-tc + sqD1) / 2.0 + sh);
+        roots.push_back((-tc - sqD1) / 2.0 + sh);
+        roots.push_back((tc + sqD2) / 2.0 + sh);
+        roots.push_back((tc - sqD2) / 2.0 + sh);
+    }
+    return roots;
+}
 
 Value Evaluator::evaluate(ASTPtr node) {
     return eval_node(node);
@@ -1044,10 +1146,6 @@ Value Evaluator::eval_convert(const Value& v, const std::string& from_raw, const
     return Value::make_error("Unknown unit conversion: " + from + " -> " + to);
 }
 
-Value Evaluator::eval_solve_ineq(ASTPtr) {
-    return Value::make_error("Inequality solving: use solve(expr, var) syntax");
-}
-
 Value Evaluator::eval_function(ASTPtr node) {
     const std::string& name = node->name;
     auto& args = node->args;
@@ -1211,7 +1309,7 @@ Value Evaluator::eval_function(ASTPtr node) {
         return eval_convert(val, from, to);
     }
     if (name == "solve") {
-        return eval_solve_ineq(node);
+        return eval_solve(node->args);
     }
     if (name == "deg") {
         if (args.size() == 1) {
@@ -1357,6 +1455,9 @@ Value Evaluator::eval_function(ASTPtr node) {
             return eval_decompose3d(eval_node(args[0]), eval_node(args[1]), eval_node(args[2]), eval_node(args[3]));
         return Value::make_error("decompose requires 3 or 4 arguments");
     }
+    if (name == "solve") {
+        return eval_solve(args);
+    }
     return Value::make_error("Unknown function: " + name);
 }
 
@@ -1485,6 +1586,58 @@ Value Evaluator::eval_decompose3d(const Value& a, const Value& b, const Value& c
     Value beta = db / det;
     Value gamma = dc / det;
     return Value::make_vector({alpha, beta, gamma});
+}
+
+Value Evaluator::eval_solve_quadratic(const Value& a, const Value& b, const Value& c) {
+    if (a.is_zero()) {
+        if (b.is_zero()) {
+            if (c.is_zero()) return Value::make_error("Infinite solutions (0=0)");
+            return Value::make_error("No solution (constant = 0)");
+        }
+        return Value::make_vector({-c / b});
+    }
+    Value D = b * b - Value(BigRat(4)) * a * c;
+    Value sqrtD = eval_sqrt(D);
+    if (sqrtD.is_error()) return sqrtD;
+    Value two_a = Value(BigRat(2)) * a;
+    Value x1 = (-b + sqrtD) / two_a;
+    Value x2 = (-b - sqrtD) / two_a;
+    return Value::make_vector({x1, x2});
+}
+
+Value Evaluator::eval_solve(const std::vector<ASTPtr>& args) {
+    int n = (int)args.size();
+    if (n < 3 || n > 5)
+        return Value::make_error("solve requires 3-5 arguments (quadratic to quartic)");
+
+    if (n == 3) {
+        Value a = eval_node(args[0]);
+        Value b = eval_node(args[1]);
+        Value c = eval_node(args[2]);
+        if (a.is_error()) return a;
+        if (b.is_error()) return b;
+        if (c.is_error()) return c;
+        return eval_solve_quadratic(a, b, c);
+    }
+
+    std::vector<double> coeffs;
+    for (auto& arg : args) {
+        Value v = eval_node(arg);
+        if (v.is_error()) return v;
+        coeffs.push_back(std::stod(v.to_string()));
+    }
+
+    if (n == 4) {
+        auto roots = solve_cubic_d(coeffs[0], coeffs[1], coeffs[2], coeffs[3]);
+        std::vector<Value> result;
+        for (auto& r : roots) result.push_back(complex_to_value(r));
+        return Value::make_vector(result);
+    }
+
+    auto roots = solve_quartic_d(coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4]);
+    std::vector<Value> result;
+    for (auto& r : roots) result.push_back(complex_to_value(r));
+    return Value::make_vector(result);
 }
 
 std::string Evaluator::format_result(const Value& v, int base) {
