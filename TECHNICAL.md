@@ -16,7 +16,9 @@ CCalc/
 ├── parser.cpp       # 词法分析与语法分析：Lexer, Parser
 ├── evaluator.cpp    # 表达式求值与函数实现：Evaluator
 ├── main.cpp         # REPL 交互界面
-└── Makefile         # 构建脚本
+├── graph.cpp        # 函数图像绘制窗口（ImGui + DirectX 11）
+├── Makefile         # 构建脚本
+└── imgui-1.92.7/    # Dear ImGui 库（仅 graph 使用）
 ```
 
 ### 2.2 数据流
@@ -547,3 +549,119 @@ make clean  # 清理
 **Windows 特殊处理**：
 - `SetConsoleOutputCP(CP_UTF8)` / `SetConsoleCP(CP_UTF8)` 设置控制台 UTF-8 编码
 - `std::flush` 确保提示符即时显示
+
+## 9. 函数图像绘制
+
+### 9.1 概述
+
+CCalc 提供独立的函数图像绘制窗口 `ccalc_graph.exe`，基于 Dear ImGui + DirectX 11 实现。用户可在 REPL 中输入 `graph(expr)` 启动（如 `graph(sin(x))`），或直接运行 `ccalc_graph.exe "sin(x)"`。
+
+### 9.2 架构设计
+
+```
+graph.cpp（独立可执行文件）
+├── 命令行参数解析（argc/argv → initial_expr）
+├── Win32 窗口创建 + DirectX 11 渲染后端
+├── ImGui 界面
+│   ├── 设置面板（默认隐藏，通过 "Settings >>" 按钮切换）
+│   │   ├── 函数列表（输入框 + 可见性开关 + 颜色标识 + 删除按钮）
+│   │   ├── 视图范围控制（X/Y 范围、自动 Y 范围）
+│   │   ├── 显示选项（网格、坐标）
+│   │   └── 角度模式（弧度/度数）
+│   ├── 右侧绘图画布
+│       ├── 坐标轴和网格
+│       ├── 函数曲线绘制
+│       ├── 鼠标悬停坐标显示
+│       └── 交互控制（缩放、平移）
+└── fast_eval() — 基于 double 的快速求值器
+```
+
+### 9.3 快速求值器（fast_eval）
+
+**设计动机**：CCalc 的核心求值器使用高精度 BigFloat 运算，每次求值涉及字符串构造、高精度计算和格式转换，对实时绘图（每帧需 ~1000 次求值）来说太慢。
+
+**解决方案**：实现一个基于原生 `double` 的快速 AST 遍历求值器，完全绕过高精度运算系统。
+
+**实现方式**：
+- 递归遍历 AST 节点
+- 每个节点类型直接使用 `double` 运算
+- 支持的节点类型：
+  - `NUMBER`：通过 `BigRat::to_string()` 转为 double（仅在 AST 缓存失效时执行一次）
+  - `CONSTANT`：`pi` → `M_PI`, `e` → `M_E`
+  - `VARIABLE`：`x` → 当前采样点值
+  - `BINOP`：`+`, `-`, `*`, `/`, `^`, `%`
+  - `UNARYOP`：一元负号
+  - `FACTORIAL`：迭代计算（限制 ≤170）
+  - `FUNCTION`：30+ 个数学函数的 double 实现
+
+**角度模式处理**：`fast_eval` 接受 `deg_mode` 参数，三角函数在度数模式下自动进行弧度转换。
+
+**不支持的函数**：`factor`, `gcd`, `lcm`, `P`, `C`, `convert`, `solve` 等返回 NAN（不适用于绘图场景）。
+
+### 9.4 AST 缓存机制
+
+**问题**：如果每次采样都重新解析表达式字符串（Lexer + Parser），每帧需解析数千次，导致窗口卡死。
+
+**解决方案**：`FuncEntry` 结构缓存解析结果：
+- `cached_ast: ASTPtr`：缓存的 AST 指针
+- `cached_expr_str: string`：缓存对应的表达式字符串
+- `ensure_ast()`：仅当表达式变化时重新解析
+
+**缓存失效**：当用户修改输入框中的表达式时，`ensure_ast()` 检测到 `expr != cached_expr_str`，触发重新解析。
+
+### 9.5 绘图算法
+
+**采样策略**：
+- 采样点数 = 画布像素宽度（通常 700~1500 点）
+- 范围：[x_min, x_max]，均匀分布
+- 每个采样点调用 `fast_eval(ast, x, deg_mode)`
+
+**不连续性检测**：
+- 当 `|y - prev_y| > (y_max - y_min) * 10` 时，认为函数不连续（如 `tan(x)` 的渐近线）
+- 不连续处断开折线，避免竖直连线
+
+**自动 Y 范围**：
+- 使用 200 个采样点预扫描所有可见函数
+- 取 Y 值范围的 10% 边距（最小 0.5）
+- 在绘制网格和坐标轴之前计算，确保坐标轴标签正确
+
+**网格间距**：使用"nice number"算法选择网格间距：
+```
+rough = range / 10
+选择 1, 2, 5, 10 中最接近 rough 的数量级
+```
+
+### 9.6 交互功能
+
+| 操作 | 实现 |
+|------|------|
+| 滚轮缩放 | 以鼠标位置为中心，乘以 0.9^wheel 因子 |
+| 右键拖拽平移 | 记录拖拽起始位置和范围，按像素偏移量换算 |
+| 鼠标悬停 | 显示十字准线 + 坐标值 + 各函数在该 x 处的值和标记点 |
+| Settings 按钮 | 左上角切换按钮，控制设置面板的显隐 |
+
+### 9.7 REPL 集成
+
+**语法**：`graph(expr)` — 在 REPL 中输入后，提取括号内的表达式文本，启动 `ccalc_graph.exe "expr"`。
+
+**实现方式**：
+- `extract_graph_args()` 函数在 REPL 层面拦截 `graph(...)` 输入
+- 提取括号内的原始文本（不经过求值），作为命令行参数传递给 `ccalc_graph.exe`
+- 使用 `start` 命令异步启动绘图窗口，REPL 不阻塞
+
+**命令行参数**：
+- `ccalc_graph.exe "sin(x)"` — 直接绘制 sin(x)
+- `ccalc_graph.exe` — 无参数时默认绘制 sin(x)
+- 窗口标题显示 `y = expr`
+
+### 9.8 构建系统
+
+**Makefile 新增目标**：
+- `ccalc_graph.exe`：链接 `graph.o` + 计算器核心对象 + ImGui 对象 + DirectX 库
+- ImGui 编译：自动编译 `imgui-1.92.7/` 下的 7 个源文件（imgui.cpp, imgui_draw.cpp, imgui_tables.cpp, imgui_widgets.cpp, imgui_demo.cpp, imgui_impl_win32.cpp, imgui_impl_dx11.cpp）
+- 链接库：`-ld3d11 -ld3dcompiler -ldxgi -ldwmapi -lgdi32 -luser32 -lshell32`
+
+**依赖关系**：
+- `graph.cpp` 依赖 `ccalc.h`（AST 定义、Lexer、Parser）
+- 不依赖 `evaluator.cpp`（使用自己的 `fast_eval`）
+- 依赖 ImGui 头文件和 Win32/DX11 头文件

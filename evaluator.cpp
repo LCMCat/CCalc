@@ -5,13 +5,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-static Value complex_to_value(const std::complex<double>& z) {
-    if (fabs(z.imag()) < 1e-10) {
-        return Value(BigFloat(z.real()));
-    }
-    return Value::make_complex(Value(BigFloat(z.real())), Value(BigFloat(z.imag())));
-}
-
 static std::vector<std::complex<double>> solve_quad_d(double a, double b, double c) {
     double D = b * b - 4 * a * c;
     if (D >= 0) {
@@ -1594,7 +1587,8 @@ Value Evaluator::eval_solve_quadratic(const Value& a, const Value& b, const Valu
             if (c.is_zero()) return Value::make_error("Infinite solutions (0=0)");
             return Value::make_error("No solution (constant = 0)");
         }
-        return Value::make_vector({-c / b});
+        Value root = -c / b;
+        return Value::make_string("Root: " + format_result(root));
     }
     Value D = b * b - Value(BigRat(4)) * a * c;
     Value sqrtD = eval_sqrt(D);
@@ -1602,7 +1596,113 @@ Value Evaluator::eval_solve_quadratic(const Value& a, const Value& b, const Valu
     Value two_a = Value(BigRat(2)) * a;
     Value x1 = (-b + sqrtD) / two_a;
     Value x2 = (-b - sqrtD) / two_a;
-    return Value::make_vector({x1, x2});
+
+    Value vx = -b / (Value(BigRat(2)) * a);
+    Value vy = a * vx * vx + b * vx + c;
+
+    std::string result;
+    result += "Roots: " + format_result(x1);
+    if (format_result(x1) != format_result(x2))
+        result += ", " + format_result(x2);
+    result += "\n";
+    result += "Delta: " + format_result(D) + "\n";
+
+    Value a_float = a;
+    if (a_float.type == Value::SURDS) a_float = Value(a_float.to_float());
+    bool a_positive = std::stod(a_float.to_string()) > 0;
+
+    if (a_positive) {
+        result += "Min: " + format_result(vy) + " at x = " + format_result(vx);
+    } else {
+        result += "Max: " + format_result(vy) + " at x = " + format_result(vx);
+    }
+
+    return Value::make_string(result);
+}
+
+static double poly_eval(const std::vector<double>& coeffs, double x) {
+    double result = 0;
+    for (size_t i = 0; i < coeffs.size(); i++) {
+        result = result * x + coeffs[i];
+    }
+    return result;
+}
+
+static std::vector<double> poly_deriv(const std::vector<double>& coeffs) {
+    int n = (int)coeffs.size() - 1;
+    std::vector<double> d;
+    for (int i = 0; i < n; i++) {
+        d.push_back(coeffs[i] * (n - i));
+    }
+    return d;
+}
+
+static std::string fmt_d(double v) {
+    if (fabs(v) < 5e-10) return "0";
+    if (fabs(v - round(v)) < 1e-9) {
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(0) << round(v);
+        return oss.str();
+    }
+    std::ostringstream oss;
+    oss << std::setprecision(10) << v;
+    std::string s = oss.str();
+    while (!s.empty() && s.back() == '0') s.pop_back();
+    if (!s.empty() && s.back() == '.') s.pop_back();
+    return s;
+}
+
+static std::string fmt_complex(const std::complex<double>& z) {
+    if (fabs(z.imag()) < 1e-10) return fmt_d(z.real());
+    if (fabs(z.real()) < 1e-10) {
+        if (fabs(z.imag() - 1.0) < 1e-10) return "i";
+        if (fabs(z.imag() + 1.0) < 1e-10) return "-i";
+        return fmt_d(z.imag()) + "*i";
+    }
+    std::string s = fmt_d(z.real()) + " + " + fmt_d(z.imag()) + "*i";
+    return s;
+}
+
+static std::string format_extrema(const std::vector<double>& coeffs,
+                                   const std::vector<std::complex<double>>& crit_pts) {
+    struct Extremum {
+        double x, y;
+        bool is_max;
+    };
+    std::vector<Extremum> extrema;
+    auto d1 = poly_deriv(coeffs);
+    auto d2 = poly_deriv(d1);
+    for (auto& cp : crit_pts) {
+        if (fabs(cp.imag()) > 1e-8) continue;
+        double x = cp.real();
+        double fpp = poly_eval(d2, x);
+        if (fabs(fpp) < 1e-12) continue;
+        double y = poly_eval(coeffs, x);
+        extrema.push_back({x, y, fpp < 0});
+    }
+    if (extrema.empty()) return "No local extrema";
+    std::sort(extrema.begin(), extrema.end(),
+              [](const Extremum& a, const Extremum& b) { return a.y < b.y; });
+    std::string result;
+    for (auto& e : extrema) {
+        if (!result.empty()) result += "\n";
+        if (e.is_max)
+            result += "Local max: " + fmt_d(e.y) + " at x = " + fmt_d(e.x);
+        else
+            result += "Local min: " + fmt_d(e.y) + " at x = " + fmt_d(e.x);
+    }
+    int deg = (int)coeffs.size() - 1;
+    if (deg == 4) {
+        bool a_pos = coeffs[0] > 0;
+        if (a_pos) {
+            auto& gmin = extrema.front();
+            result += "\nGlobal min: " + fmt_d(gmin.y) + " at x = " + fmt_d(gmin.x);
+        } else {
+            auto& gmax = extrema.back();
+            result += "\nGlobal max: " + fmt_d(gmax.y) + " at x = " + fmt_d(gmax.x);
+        }
+    }
+    return result;
 }
 
 Value Evaluator::eval_solve(const std::vector<ASTPtr>& args) {
@@ -1629,15 +1729,31 @@ Value Evaluator::eval_solve(const std::vector<ASTPtr>& args) {
 
     if (n == 4) {
         auto roots = solve_cubic_d(coeffs[0], coeffs[1], coeffs[2], coeffs[3]);
-        std::vector<Value> result;
-        for (auto& r : roots) result.push_back(complex_to_value(r));
-        return Value::make_vector(result);
+        std::string result = "Roots: ";
+        bool first = true;
+        for (auto& r : roots) {
+            if (!first) result += ", ";
+            first = false;
+            result += fmt_complex(r);
+        }
+        double da = 3 * coeffs[0], db = 2 * coeffs[1], dc = coeffs[2];
+        auto crit = solve_quad_d(da, db, dc);
+        result += "\n" + format_extrema(coeffs, crit);
+        return Value::make_string(result);
     }
 
     auto roots = solve_quartic_d(coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4]);
-    std::vector<Value> result;
-    for (auto& r : roots) result.push_back(complex_to_value(r));
-    return Value::make_vector(result);
+    std::string result = "Roots: ";
+    bool first = true;
+    for (auto& r : roots) {
+        if (!first) result += ", ";
+        first = false;
+        result += fmt_complex(r);
+    }
+    double da = 4 * coeffs[0], db = 3 * coeffs[1], dc = 2 * coeffs[2], dd = coeffs[3];
+    auto crit = solve_cubic_d(da, db, dc, dd);
+    result += "\n" + format_extrema(coeffs, crit);
+    return Value::make_string(result);
 }
 
 std::string Evaluator::format_result(const Value& v, int base) {

@@ -69,6 +69,7 @@ static void print_help() {
     std::cout << "  solve(a,b,c)                    - Quadratic: ax^2+bx+c=0 (exact)" << std::endl;
     std::cout << "  solve(a,b,c,d)                  - Cubic: ax^3+bx^2+cx+d=0" << std::endl;
     std::cout << "  solve(a,b,c,d,e)                - Quartic: ax^4+bx^3+cx^2+dx+e=0" << std::endl;
+    std::cout << "  graph(expr)                     - Plot function y=expr (e.g. graph(sin(x)))" << std::endl;
     std::cout << std::endl;
     std::cout << "Commands:" << std::endl;
     std::cout << "  deg / rad                       - Set angle mode" << std::endl;
@@ -129,6 +130,15 @@ static std::vector<std::string> split_top_level(const std::string& input) {
     }
     parts.push_back(trim(input.substr(start)));
     return parts;
+}
+
+static std::string extract_graph_args(const std::string& input) {
+    std::string s = trim(input);
+    if (s.size() < 7) return "";
+    if (s.substr(0, 6) != "graph(" || s.back() != ')') return "";
+    std::string inner = s.substr(6, s.size() - 7);
+    if (inner.empty()) return "";
+    return trim(inner);
 }
 
 int main() {
@@ -204,6 +214,15 @@ int main() {
             for (size_t pi = 0; pi < parts.size(); pi++) {
                 const std::string& part = parts[pi];
                 if (part.empty()) continue;
+
+                std::string graph_expr = extract_graph_args(part);
+                if (!graph_expr.empty()) {
+                    std::string cmd = "start ccalc_graph.exe \"" + graph_expr + "\"";
+                    std::system(cmd.c_str());
+                    std::cout << "Graph: y = " << graph_expr << std::endl;
+                    continue;
+                }
+
                 size_t eq_pos = part.find('=');
                 if (eq_pos != std::string::npos && eq_pos > 0) {
                     std::string var_name = trim(part.substr(0, eq_pos));

@@ -86,6 +86,22 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 - `solve(a, b, c, d)` — cubic ax³+bx²+cx+d=0 (Cardano's formula)
 - `solve(a, b, c, d, e)` — quartic ax⁴+bx³+cx²+dx+e=0 (Ferrari's method)
 - Complex roots supported: `solve(1,0,1)` → `(i, -i)`
+- Discriminant, local/global extrema and extremal points included
+
+### Function Graphing
+- `graph(expr)` — open a graph window plotting y=expr (e.g. `graph(sin(x))`, `graph(x^2-3*x+1)`)
+- Powered by Dear ImGui + DirectX 11
+- Or run directly: `ccalc_graph "sin(x)"`
+- Clean interface: only the graph is shown by default
+  - Click **Settings >>** button to toggle the settings panel
+  - Settings: add/remove functions, view range, grid, angle mode
+- Features:
+  - Plot up to 8 functions simultaneously with different colors
+  - Variable `x` is the independent variable
+  - Zoom (scroll wheel), pan (right-drag), hover for coordinates
+  - Auto Y-range, grid, axis display
+  - Angle mode (radians/degrees)
+  - Expression syntax identical to the calculator
 
 ## Exact Value Examples
 
@@ -133,7 +149,9 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 ### Compile
 
 ```bash
-make
+make            # Build both ccalc.exe and ccalc_graph.exe
+make ccalc.exe  # Build calculator only
+make ccalc_graph.exe  # Build graph window only
 ```
 
 ### Clean
@@ -216,6 +234,7 @@ Goodbye!
 | `base N` | Set output base (2–36) |
 | `prec N` | Set precision to N digits (1–10000) |
 | `ans` | Last answer |
+| `graph(expr)` | Plot function y=expr |
 | `help` | Show help |
 | `quit` / `exit` | Exit |
 
