@@ -110,6 +110,23 @@ static std::string trim(const std::string& s) {
     return s.substr(start, end - start);
 }
 
+static std::vector<std::string> split_top_level(const std::string& input) {
+    std::vector<std::string> parts;
+    int depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i < input.size(); i++) {
+        char c = input[i];
+        if (c == '(') depth++;
+        else if (c == ')') depth--;
+        else if (c == ',' && depth == 0) {
+            parts.push_back(trim(input.substr(start, i - start)));
+            start = i + 1;
+        }
+    }
+    parts.push_back(trim(input.substr(start)));
+    return parts;
+}
+
 int main() {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
@@ -179,32 +196,37 @@ int main() {
         }
 
         try {
-            size_t eq_pos = line.find('=');
-            if (eq_pos != std::string::npos && eq_pos > 0) {
-                std::string var_name = trim(line.substr(0, eq_pos));
-                if (is_assignable_var(var_name)) {
-                    std::string expr_str = trim(line.substr(eq_pos + 1));
-                    if (!expr_str.empty()) {
-                        Value result = evaluator.evaluate(expr_str);
-                        if (result.is_error()) {
-                            std::cout << result.to_string() << std::endl;
-                        } else {
-                            if (is_vec_var(var_name)) {
-                                evaluator.set_vec_variable(var_name, result);
+            auto parts = split_top_level(line);
+            for (size_t pi = 0; pi < parts.size(); pi++) {
+                const std::string& part = parts[pi];
+                if (part.empty()) continue;
+                size_t eq_pos = part.find('=');
+                if (eq_pos != std::string::npos && eq_pos > 0) {
+                    std::string var_name = trim(part.substr(0, eq_pos));
+                    if (is_assignable_var(var_name)) {
+                        std::string expr_str = trim(part.substr(eq_pos + 1));
+                        if (!expr_str.empty()) {
+                            Value result = evaluator.evaluate(expr_str);
+                            if (result.is_error()) {
+                                std::cout << result.to_string() << std::endl;
                             } else {
-                                evaluator.set_variable(var_name, result);
+                                if (is_vec_var(var_name)) {
+                                    evaluator.set_vec_variable(var_name, result);
+                                } else {
+                                    evaluator.set_variable(var_name, result);
+                                }
+                                std::cout << var_name << " = "
+                                          << Evaluator::format_result(result, evaluator.output_base())
+                                          << std::endl;
                             }
-                            std::cout << var_name << " = "
-                                      << Evaluator::format_result(result, evaluator.output_base())
-                                      << std::endl;
+                            continue;
                         }
-                        continue;
                     }
                 }
+                Value result = evaluator.evaluate(part);
+                std::cout << Evaluator::format_result(result, evaluator.output_base())
+                          << std::endl;
             }
-            Value result = evaluator.evaluate(line);
-            std::cout << Evaluator::format_result(result, evaluator.output_base())
-                      << std::endl;
         } catch (const CalcError& e) {
             std::cout << "Error: " << e.what() << std::endl;
         } catch (const std::exception& e) {

@@ -10,6 +10,7 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 - `+  -  *  /  ^  %` with arbitrary precision
 - Exact rational arithmetic: `10/3` → `10/3 (= 3.333...)`
 - Implicit multiplication: `2pi`, `3(1+2)`, `(2)pi`
+- Comma-separated expressions: `x=1, x+1, 2/2` → evaluates and outputs each result
 
 ### Constants
 - `pi` — π, with 1000+ digit precision
@@ -111,6 +112,7 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 | `dot((1,2),(3,4))` | `11` |
 | `cross((1,0,0),(0,1,0))` | `(0, 0, 1)` |
 | `decompose((1,1),(1,0),(0,1))` | `(1, 1)` |
+| `x=1, x+1, 2/2, 1-2*5` | `1`, `2`, `1`, `-9` |
 
 ## Build
 
@@ -176,6 +178,15 @@ CCalc> 3*VerA
 (3, 6, 9)
 CCalc> proj((1,2),(3,4))
 (33/25 (= 1.32), 44/25 (= 1.76))
+CCalc> x=1, x+1, 2/2, 1-2*5
+x = 1
+2
+1
+-9
+CCalc> sin(pi/2), cos(pi/3), log(2,8)
+1
+1/2 (= 0.5)
+3
 CCalc> quit
 Goodbye!
 ```
