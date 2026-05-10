@@ -13,7 +13,9 @@ static const std::vector<std::string> known_functions = {
     "convert", "solve",
     "deg", "rad",
     "vecmod", "dot", "cross", "scalarmul", "mixed", "proj", "decompose",
-    "solve"
+    "matrix", "det", "inv", "eigen", "trace", "transpose", "identity",
+    "mean", "stddev", "variance", "median",
+    "simplify"
 };
 
 static bool is_known_function(const std::string& name) {
@@ -123,7 +125,10 @@ std::vector<Token> Lexer::tokenize() {
             case '%': tokens.push_back(Token(TokenType::PERCENT, "%", pos_)); pos_++; break;
             case '(': tokens.push_back(Token(TokenType::LPAREN, "(", pos_)); pos_++; break;
             case ')': tokens.push_back(Token(TokenType::RPAREN, ")", pos_)); pos_++; break;
+            case '[': tokens.push_back(Token(TokenType::LBRACKET, "[", pos_)); pos_++; break;
+            case ']': tokens.push_back(Token(TokenType::RBRACKET, "]", pos_)); pos_++; break;
             case ',': tokens.push_back(Token(TokenType::COMMA, ",", pos_)); pos_++; break;
+            case ';': tokens.push_back(Token(TokenType::SEMICOLON, ";", pos_)); pos_++; break;
             case '!': tokens.push_back(Token(TokenType::BANG, "!", pos_)); pos_++; break;
             case '=': tokens.push_back(Token(TokenType::EQUAL, "=", pos_)); pos_++; break;
             case '<':
@@ -334,6 +339,32 @@ ASTPtr Parser::primary() {
             throw CalcError("Expected ')'");
         }
         return first;
+    }
+    if (check(TokenType::LBRACKET)) {
+        advance();
+        std::vector<std::vector<ASTPtr>> rows;
+        if (check(TokenType::RBRACKET)) {
+            advance();
+            return ASTNode::make_mat_literal(rows);
+        }
+        do {
+            std::vector<ASTPtr> row;
+            row.push_back(expression());
+            while (check(TokenType::COMMA)) {
+                advance();
+                row.push_back(expression());
+            }
+            rows.push_back(row);
+            if (check(TokenType::SEMICOLON)) {
+                advance();
+            } else {
+                break;
+            }
+        } while (true);
+        if (!match(TokenType::RBRACKET)) {
+            throw CalcError("Expected ']'");
+        }
+        return ASTNode::make_mat_literal(rows);
     }
     throw CalcError("Unexpected token: " + peek().text);
 }

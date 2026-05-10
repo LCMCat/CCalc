@@ -1,4 +1,5 @@
 #include "ccalc.h"
+#include <fstream>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -69,7 +70,24 @@ static void print_help() {
     std::cout << "  solve(a,b,c)                    - Quadratic: ax^2+bx+c=0 (exact)" << std::endl;
     std::cout << "  solve(a,b,c,d)                  - Cubic: ax^3+bx^2+cx+d=0" << std::endl;
     std::cout << "  solve(a,b,c,d,e)                - Quartic: ax^4+bx^3+cx^2+dx+e=0" << std::endl;
-    std::cout << "  graph(expr)                     - Plot function y=expr (e.g. graph(sin(x)))" << std::endl;
+    std::cout << "  graph(expr)                     - Plot y=expr (e.g. graph(sin(x)))" << std::endl;
+    std::cout << "  graph_implicit(expr)            - Plot f(x,y)=0 (e.g. graph_implicit(x^2+y^2-1))" << std::endl;
+    std::cout << "  graph_param(t, x_expr, y_expr)  - Plot parametric (e.g. graph_param(t, cos(t), sin(t)))" << std::endl;
+    std::cout << "  graph_polar(r_expr)             - Plot polar r=f(theta) (e.g. graph_polar(1+cos(theta)))" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Matrix:" << std::endl;
+    std::cout << "  [[1,2],[3,4]]                  - Matrix literal" << std::endl;
+    std::cout << "  det(m), inv(m), eigen(m)       - Determinant, inverse, eigenvalues" << std::endl;
+    std::cout << "  trace(m), transpose(m)         - Trace, transpose" << std::endl;
+    std::cout << "  identity(n)                    - n x n identity matrix" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Statistics:" << std::endl;
+    std::cout << "  mean(a,b,...)                  - Arithmetic mean" << std::endl;
+    std::cout << "  stddev(a,b,...)                - Standard deviation" << std::endl;
+    std::cout << "  variance(a,b,...)              - Variance" << std::endl;
+    std::cout << "  median(a,b,...)                - Median" << std::endl;
+    std::cout << std::endl;
+    std::cout << "  simplify(expr)                 - Simplify expression" << std::endl;
     std::cout << std::endl;
     std::cout << "Commands:" << std::endl;
     std::cout << "  deg / rad                       - Set angle mode" << std::endl;
@@ -118,6 +136,32 @@ static std::string trim(const std::string& s) {
 static std::vector<std::string> split_top_level(const std::string& input) {
     std::vector<std::string> parts;
     int depth = 0;
+    int bracket_depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i < input.size(); i++) {
+        char c = input[i];
+        if (c == '(') depth++;
+        else if (c == ')') depth--;
+        else if (c == '[') bracket_depth++;
+        else if (c == ']') bracket_depth--;
+        else if (c == ',' && depth == 0 && bracket_depth == 0) {
+            parts.push_back(trim(input.substr(start, i - start)));
+            start = i + 1;
+        }
+    }
+    parts.push_back(trim(input.substr(start)));
+    return parts;
+}
+
+struct GraphCmd {
+    enum Type { EXPLICIT, IMPLICIT, PARAMETRIC, POLAR, NONE };
+    Type type = NONE;
+    std::string expr, expr2;
+};
+
+static std::vector<std::string> split_args(const std::string& input) {
+    std::vector<std::string> parts;
+    int depth = 0;
     size_t start = 0;
     for (size_t i = 0; i < input.size(); i++) {
         char c = input[i];
@@ -132,20 +176,79 @@ static std::vector<std::string> split_top_level(const std::string& input) {
     return parts;
 }
 
-static std::string extract_graph_args(const std::string& input) {
+static GraphCmd parse_graph_cmd(const std::string& input) {
     std::string s = trim(input);
-    if (s.size() < 7) return "";
-    if (s.substr(0, 6) != "graph(" || s.back() != ')') return "";
-    std::string inner = s.substr(6, s.size() - 7);
-    if (inner.empty()) return "";
-    return trim(inner);
+    GraphCmd cmd;
+
+    if (s.size() >= 7 && s.substr(0, 6) == "graph(" && s.back() == ')') {
+        cmd.type = GraphCmd::EXPLICIT;
+        cmd.expr = trim(s.substr(6, s.size() - 7));
+    } else if (s.size() >= 17 && s.substr(0, 15) == "graph_implicit(" && s.back() == ')') {
+        cmd.type = GraphCmd::IMPLICIT;
+        cmd.expr = trim(s.substr(15, s.size() - 16));
+    } else if (s.size() >= 13 && s.substr(0, 11) == "graph_param(" && s.back() == ')') {
+        cmd.type = GraphCmd::PARAMETRIC;
+        std::string inner = s.substr(11, s.size() - 12);
+        auto parts = split_args(inner);
+        if (parts.size() >= 3) {
+            cmd.expr = trim(parts[1]);
+            cmd.expr2 = trim(parts[2]);
+        }
+    } else if (s.size() >= 13 && s.substr(0, 11) == "graph_polar(" && s.back() == ')') {
+        cmd.type = GraphCmd::POLAR;
+        cmd.expr = trim(s.substr(11, s.size() - 12));
+    }
+
+    return cmd;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 #endif
+
+    if (argc >= 3 && std::string(argv[1]) == "-f") {
+        std::ifstream file(argv[2]);
+        if (!file.is_open()) {
+            std::cerr << "Cannot open file: " << argv[2] << std::endl;
+            return 1;
+        }
+        Evaluator evaluator;
+        std::string line;
+        while (std::getline(file, line)) {
+            line = trim(line);
+            if (line.empty() || line[0] == '#') continue;
+            try {
+                auto parts = split_top_level(line);
+                for (size_t pi = 0; pi < parts.size(); pi++) {
+                    const std::string& part = parts[pi];
+                    if (part.empty()) continue;
+                    GraphCmd gcmd = parse_graph_cmd(part);
+                    if (gcmd.type != GraphCmd::NONE) continue;
+                    size_t eq_pos = part.find('=');
+                    if (eq_pos != std::string::npos && eq_pos > 0) {
+                        std::string lhs = trim(part.substr(0, eq_pos));
+                        std::string rhs = trim(part.substr(eq_pos + 1));
+                        if (lhs == "x" || lhs == "y" || lhs == "A" || lhs == "B" || lhs == "C" || lhs == "D") {
+                            evaluator.set_variable(lhs, evaluator.evaluate(rhs));
+                            continue;
+                        }
+                        if (lhs == "VerA" || lhs == "VerB" || lhs == "VerC" || lhs == "VerD") {
+                            evaluator.set_vec_variable(lhs, evaluator.evaluate(rhs));
+                            continue;
+                        }
+                    }
+                    Value result = evaluator.evaluate(part);
+                    std::cout << evaluator.format_result(result) << std::endl;
+                }
+            } catch (const std::exception& e) {
+                std::cout << "Error: " << e.what() << std::endl;
+            }
+        }
+        return 0;
+    }
+
     std::cout << "CCalc v1.0 - Command-line Advanced Calculator" << std::endl;
     std::cout << "Type 'help' for help, 'quit' to exit." << std::endl;
     std::cout << std::endl;
@@ -215,11 +318,23 @@ int main() {
                 const std::string& part = parts[pi];
                 if (part.empty()) continue;
 
-                std::string graph_expr = extract_graph_args(part);
-                if (!graph_expr.empty()) {
-                    std::string cmd = "start ccalc_graph.exe \"" + graph_expr + "\"";
+                GraphCmd gcmd = parse_graph_cmd(part);
+                if (gcmd.type != GraphCmd::NONE) {
+                    std::string cmd;
+                    if (gcmd.type == GraphCmd::EXPLICIT) {
+                        cmd = "start ccalc_graph.exe \"" + gcmd.expr + "\"";
+                        std::cout << "Graph: y = " << gcmd.expr << std::endl;
+                    } else if (gcmd.type == GraphCmd::IMPLICIT) {
+                        cmd = "start ccalc_graph.exe -i \"" + gcmd.expr + "\"";
+                        std::cout << "Graph: " << gcmd.expr << " = 0" << std::endl;
+                    } else if (gcmd.type == GraphCmd::PARAMETRIC) {
+                        cmd = "start ccalc_graph.exe -p \"" + gcmd.expr + "\" \"" + gcmd.expr2 + "\"";
+                        std::cout << "Graph: param(" << gcmd.expr << ", " << gcmd.expr2 << ")" << std::endl;
+                    } else if (gcmd.type == GraphCmd::POLAR) {
+                        cmd = "start ccalc_graph.exe -l \"" + gcmd.expr + "\"";
+                        std::cout << "Graph: r = " << gcmd.expr << std::endl;
+                    }
                     std::system(cmd.c_str());
-                    std::cout << "Graph: y = " << graph_expr << std::endl;
                     continue;
                 }
 

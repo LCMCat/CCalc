@@ -269,7 +269,7 @@ struct ComplexVal {
 
 class Value {
 public:
-    enum Type { SURDS, FLOAT, COMPLEX, VECTOR, STRING, ERROR };
+    enum Type { SURDS, FLOAT, COMPLEX, VECTOR, MATRIX, STRING, ERROR };
 
     Type type;
 
@@ -277,6 +277,9 @@ public:
     BigFloat float_val;
     ComplexVal complex;
     std::vector<Value> vec;
+    std::vector<std::vector<Value>> mat;
+    int mat_rows() const { return is_matrix() ? (int)mat.size() : 0; }
+    int mat_cols() const { return is_matrix() && !mat.empty() ? (int)mat[0].size() : 0; }
     std::string error_msg;
 
     Value() : type(SURDS), surds(BigRat(0)) {}
@@ -304,6 +307,12 @@ public:
         v.vec = components;
         return v;
     }
+    static Value make_matrix(const std::vector<std::vector<Value>>& rows) {
+        Value v;
+        v.type = MATRIX;
+        v.mat = rows;
+        return v;
+    }
 
     bool is_error() const { return type == ERROR; }
     bool is_string() const { return type == STRING; }
@@ -311,6 +320,7 @@ public:
     bool is_rational() const;
     bool is_complex() const { return type == COMPLEX; }
     bool is_vector() const { return type == VECTOR; }
+    bool is_matrix() const { return type == MATRIX; }
     bool is_zero() const;
 
     int vec_dim() const { return is_vector() ? (int)vec.size() : 0; }
@@ -334,7 +344,7 @@ public:
 
 enum class TokenType {
     NUMBER, IDENTIFIER, PLUS, MINUS, STAR, SLASH, CARET, PERCENT,
-    LPAREN, RPAREN, COMMA, BANG, EQUAL, LT, GT, LE, GE, NEQ,
+    LPAREN, RPAREN, LBRACKET, RBRACKET, COMMA, SEMICOLON, BANG, EQUAL, LT, GT, LE, GE, NEQ,
     END_OF_INPUT, ERROR
 };
 
@@ -369,7 +379,7 @@ using ASTPtr = std::shared_ptr<ASTNode>;
 
 struct ASTNode {
     enum Type {
-        NUMBER, CONSTANT, VARIABLE, BINOP, UNARYOP, FUNCTION, FACTORIAL, VEC_LITERAL
+        NUMBER, CONSTANT, VARIABLE, BINOP, UNARYOP, FUNCTION, FACTORIAL, VEC_LITERAL, MAT_LITERAL
     };
 
     Type type;
@@ -432,6 +442,14 @@ struct ASTNode {
         p->args = std::move(components);
         return p;
     }
+    static ASTPtr make_mat_literal(std::vector<std::vector<ASTPtr>> rows) {
+        auto p = std::make_shared<ASTNode>();
+        p->type = MAT_LITERAL;
+        p->mat_rows = std::move(rows);
+        return p;
+    }
+
+    std::vector<std::vector<ASTPtr>> mat_rows;
 };
 
 class Parser {
@@ -560,6 +578,21 @@ private:
 
     Value eval_solve(const std::vector<ASTPtr>& args);
     Value eval_solve_quadratic(const Value& a, const Value& b, const Value& c);
+
+    Value eval_matrix(const std::vector<ASTPtr>& args);
+    Value eval_det(const Value& m);
+    Value eval_inv(const Value& m);
+    Value eval_eigen(const Value& m);
+    Value eval_trace(const Value& m);
+    Value eval_transpose(const Value& m);
+    Value eval_identity(const Value& n);
+
+    Value eval_mean(const std::vector<Value>& args);
+    Value eval_stddev(const std::vector<Value>& args);
+    Value eval_variance(const std::vector<Value>& args);
+    Value eval_median(const std::vector<Value>& args);
+
+    Value eval_simplify(ASTPtr node);
 
     Value try_exact_trig(const BigRat& pi_coeff, int func);
     Value substitute(ASTPtr node, const std::string& var, const Value& val);

@@ -88,17 +88,46 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 - Complex roots supported: `solve(1,0,1)` → `(i, -i)`
 - Discriminant, local/global extrema and extremal points included
 
+### Matrix Operations
+- Matrix literal: `[1,2;3,4]` (rows separated by `;`, columns by `,`)
+- Arithmetic: `+`, `-`, `*` (matrix multiplication), scalar multiplication
+- `det(m)` — determinant (exact rational arithmetic)
+- `inv(m)` — inverse matrix (exact rational arithmetic)
+- `eigen(m)` — eigenvalues (2x2 and 3x3)
+- `trace(m)` — trace
+- `transpose(m)` — transpose
+- `identity(n)` or `eye(n)` — n×n identity matrix
+
+### Statistics
+- `mean(a,b,c,...)` — arithmetic mean
+- `stddev(a,b,c,...)` — sample standard deviation
+- `variance(a,b,c,...)` — sample variance
+- `median(a,b,c,...)` — median
+
+### Expression Simplification
+- `simplify(expr)` — evaluate and show simplified result
+- Example: `simplify(6/3)` → `6/3 = 2`
+
+### Batch Mode
+- `ccalc -f file.txt` — read expressions from file, output results line by line
+- Lines starting with `#` are comments
+- Variable assignments work in batch mode
+
 ### Function Graphing
-- `graph(expr)` — open a graph window plotting y=expr (e.g. `graph(sin(x))`, `graph(x^2-3*x+1)`)
+- `graph(expr)` — plot y=expr (e.g. `graph(sin(x))`, `graph(x^2-3*x+1)`)
+- `graph_implicit(expr)` — plot f(x,y)=0 (e.g. `graph_implicit(x^2+y^2-1)` draws a circle)
+- `graph_param(t, x_expr, y_expr)` — parametric curve (e.g. `graph_param(t, cos(t), sin(t))` draws a circle)
+- `graph_polar(r_expr)` — polar curve r=f(θ) (e.g. `graph_polar(1+cos(theta))` draws a cardioid)
 - Powered by Dear ImGui + DirectX 11
-- Or run directly: `ccalc_graph "sin(x)"`
+- Or run directly: `ccalc_graph "sin(x)"`, `ccalc_graph -i "x^2+y^2-1"`, `ccalc_graph -p "cos(t)" "sin(t)"`, `ccalc_graph -l "1+cos(theta)"`
 - Clean interface: only the graph is shown by default
   - Click **Settings >>** button to toggle the settings panel
-  - Settings: add/remove functions, view range, grid, angle mode
+  - Settings: add/remove functions, graph type, view range, grid, angle mode, parameter range
 - Features:
   - Plot up to 8 functions simultaneously with different colors
-  - Variable `x` is the independent variable
-  - Zoom (scroll wheel), pan (right-drag), hover for coordinates
+  - Four graph types: explicit y=f(x), implicit f(x,y)=0, parametric, polar
+  - Implicit uses Marching Squares algorithm for smooth contours
+  - Zoom (scroll wheel), pan (left-drag), hover for coordinates
   - Auto Y-range, grid, axis display
   - Angle mode (radians/degrees)
   - Expression syntax identical to the calculator
@@ -139,6 +168,13 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 | `solve(1,-1,-1)` | `(sqrt(5)/2+1/2, -sqrt(5)/2+1/2)` |
 | `solve(1,0,0,-1)` | `(1, -0.5+0.866i, -0.5-0.866i)` |
 | `solve(1,0,1)` | `(i, -i)` |
+| `det([1,2;3,4])` | `-2` |
+| `inv([1,2;3,4])` | `[[-2, 1]; [3/2, -1/2]]` |
+| `[1,2;3,4]*[5;6]` | `[[17]; [39]]` |
+| `mean(1,2,3,4,5)` | `3` |
+| `stddev(1,2,3,4,5)` | `sqrt(2) ~= 1.414...` |
+| `median(1,2,3,4,5)` | `3` |
+| `simplify(6/3)` | `6/3 = 2` |
 
 ## Build
 

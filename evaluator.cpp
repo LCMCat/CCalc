@@ -1,5 +1,7 @@
 #include "ccalc.h"
 #include <complex>
+#include <algorithm>
+#include <sstream>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -13,6 +15,300 @@ static std::vector<std::complex<double>> solve_quad_d(double a, double b, double
     }
     double sq = sqrt(-D);
     return {{-b / (2 * a), sq / (2 * a)}, {-b / (2 * a), -sq / (2 * a)}};
+}
+
+static double val_to_double(const Value& v) {
+    if (v.is_error()) return NAN;
+    try { return std::stod(v.to_string()); }
+    catch (...) { return NAN; }
+}
+
+static std::vector<std::complex<double>> solve_cubic_d(double a, double b, double c, double d);
+
+Value Evaluator::eval_matrix(const std::vector<ASTPtr>& args) {
+    if (args.empty()) return Value::make_error("matrix requires arguments");
+    Value v = eval_node(args[0]);
+    if (v.is_matrix()) return v;
+    return Value::make_error("matrix: expected matrix literal or argument");
+}
+
+Value Evaluator::eval_det(const Value& m) {
+    if (!m.is_matrix()) return Value::make_error("det requires a matrix");
+    int n = m.mat_rows();
+    if (n != m.mat_cols()) return Value::make_error("det requires a square matrix");
+    if (n == 1) return m.mat[0][0];
+    if (n == 2) return m.mat[0][0] * m.mat[1][1] - m.mat[0][1] * m.mat[1][0];
+    if (n == 3) {
+        return m.mat[0][0] * (m.mat[1][1] * m.mat[2][2] - m.mat[1][2] * m.mat[2][1])
+             - m.mat[0][1] * (m.mat[1][0] * m.mat[2][2] - m.mat[1][2] * m.mat[2][0])
+             + m.mat[0][2] * (m.mat[1][0] * m.mat[2][1] - m.mat[1][1] * m.mat[2][0]);
+    }
+    Value result(BigRat(0));
+    for (int j = 0; j < n; j++) {
+        std::vector<std::vector<Value>> sub;
+        for (int r = 1; r < n; r++) {
+            std::vector<Value> row;
+            for (int c = 0; c < n; c++) {
+                if (c != j) row.push_back(m.mat[r][c]);
+            }
+            sub.push_back(row);
+        }
+        Value minor = eval_det(Value::make_matrix(sub));
+        if (minor.is_error()) return minor;
+        Value sign(BigRat(j % 2 == 0 ? 1 : -1));
+        result = result + sign * m.mat[0][j] * minor;
+    }
+    return result;
+}
+
+Value Evaluator::eval_inv(const Value& m) {
+    if (!m.is_matrix()) return Value::make_error("inv requires a matrix");
+    int n = m.mat_rows();
+    if (n != m.mat_cols()) return Value::make_error("inv requires a square matrix");
+    Value d = eval_det(m);
+    if (d.is_zero()) return Value::make_error("Matrix is singular (det=0)");
+    if (n == 1) {
+        Value one(BigRat(1));
+        std::vector<std::vector<Value>> r = {{one / m.mat[0][0]}};
+        return Value::make_matrix(r);
+    }
+    std::vector<std::vector<Value>> cofactors;
+    for (int i = 0; i < n; i++) {
+        std::vector<Value> row;
+        for (int j = 0; j < n; j++) {
+            std::vector<std::vector<Value>> sub;
+            for (int r = 0; r < n; r++) {
+                if (r == i) continue;
+                std::vector<Value> sr;
+                for (int c = 0; c < n; c++) {
+                    if (c != j) sr.push_back(m.mat[r][c]);
+                }
+                sub.push_back(sr);
+            }
+            Value minor = eval_det(Value::make_matrix(sub));
+            Value sign(BigRat((i + j) % 2 == 0 ? 1 : -1));
+            row.push_back(sign * minor);
+        }
+        cofactors.push_back(row);
+    }
+    std::vector<std::vector<Value>> adj;
+    for (int i = 0; i < n; i++) {
+        std::vector<Value> row;
+        for (int j = 0; j < n; j++) {
+            row.push_back(cofactors[j][i] / d);
+        }
+        adj.push_back(row);
+    }
+    return Value::make_matrix(adj);
+}
+
+Value Evaluator::eval_eigen(const Value& m) {
+    if (!m.is_matrix()) return Value::make_error("eigen requires a matrix");
+    int n = m.mat_rows();
+    if (n != m.mat_cols()) return Value::make_error("eigen requires a square matrix");
+    if (n > 4) return Value::make_error("eigen supports up to 4x4 matrices");
+    if (n == 1) return Value::make_string("Eigenvalue: " + m.mat[0][0].to_string());
+    std::vector<double> coeffs(n + 1, 0);
+    if (n == 2) {
+        double a = val_to_double(m.mat[0][0]), b = val_to_double(m.mat[0][1]);
+        double c = val_to_double(m.mat[1][0]), d = val_to_double(m.mat[1][1]);
+        coeffs = {1, -(a + d), a * d - b * c};
+    } else if (n == 3) {
+        double a = val_to_double(m.mat[0][0]), b = val_to_double(m.mat[0][1]), cc = val_to_double(m.mat[0][2]);
+        double d = val_to_double(m.mat[1][0]), e = val_to_double(m.mat[1][1]), f = val_to_double(m.mat[1][2]);
+        double g = val_to_double(m.mat[2][0]), h = val_to_double(m.mat[2][1]), k = val_to_double(m.mat[2][2]);
+        double tr = a + e + k;
+        double det_val = a*(e*k-f*h) - b*(d*k-f*g) + cc*(d*h-e*g);
+        double m2 = a*a+b*d+cc*g + d*b+e*e+f*h + g*cc+h*f+k*k;
+        coeffs = {1, -tr, (tr*tr - m2)/2, -det_val};
+    } else {
+        return Value::make_error("eigen for 4x4 not fully supported");
+    }
+    std::vector<std::complex<double>> roots;
+    if (n == 2) roots = solve_quad_d(coeffs[0], coeffs[1], coeffs[2]);
+    else if (n == 3) roots = solve_cubic_d(coeffs[0], coeffs[1], coeffs[2], coeffs[3]);
+    std::string result = "Eigenvalues: ";
+    bool first = true;
+    for (auto& r : roots) {
+        if (!first) result += ", ";
+        first = false;
+        if (fabs(r.imag()) < 1e-10) {
+            char buf[64]; snprintf(buf, sizeof(buf), "%.6g", r.real());
+            result += buf;
+        } else {
+            char buf[128]; snprintf(buf, sizeof(buf), "%.6g%+.6gi", r.real(), r.imag());
+            result += buf;
+        }
+    }
+    return Value::make_string(result);
+}
+
+Value Evaluator::eval_trace(const Value& m) {
+    if (!m.is_matrix()) return Value::make_error("trace requires a matrix");
+    if (m.mat_rows() != m.mat_cols()) return Value::make_error("trace requires a square matrix");
+    Value sum(BigRat(0));
+    for (int i = 0; i < m.mat_rows(); i++)
+        sum = sum + m.mat[i][i];
+    return sum;
+}
+
+Value Evaluator::eval_transpose(const Value& m) {
+    if (!m.is_matrix()) return Value::make_error("transpose requires a matrix");
+    int r = m.mat_rows(), c = m.mat_cols();
+    std::vector<std::vector<Value>> result;
+    for (int j = 0; j < c; j++) {
+        std::vector<Value> row;
+        for (int i = 0; i < r; i++)
+            row.push_back(m.mat[i][j]);
+        result.push_back(row);
+    }
+    return Value::make_matrix(result);
+}
+
+Value Evaluator::eval_identity(const Value& n) {
+    int size = (int)val_to_double(n);
+    if (size <= 0 || size > 100) return Value::make_error("identity: invalid size");
+    std::vector<std::vector<Value>> result;
+    for (int i = 0; i < size; i++) {
+        std::vector<Value> row;
+        for (int j = 0; j < size; j++)
+            row.push_back(Value(BigRat(i == j ? 1 : 0)));
+        result.push_back(row);
+    }
+    return Value::make_matrix(result);
+}
+
+Value Evaluator::eval_mean(const std::vector<Value>& args) {
+    if (args.empty()) return Value::make_error("mean requires at least 1 argument");
+    Value sum(BigRat(0));
+    for (auto& v : args) {
+        if (v.is_vector()) {
+            for (auto& c : v.vec) sum = sum + c;
+            sum = sum / Value(BigRat((int)v.vec.size()));
+        } else {
+            sum = sum + v;
+        }
+    }
+    int total = 0;
+    for (auto& v : args) {
+        total += v.is_vector() ? (int)v.vec.size() : 1;
+    }
+    if (total <= 0) return Value::make_error("mean: no values");
+    return sum / Value(BigRat(total));
+}
+
+Value Evaluator::eval_variance(const std::vector<Value>& args) {
+    if (args.size() < 2) return Value::make_error("variance requires at least 2 values");
+    std::vector<double> vals;
+    for (auto& v : args) {
+        if (v.is_vector()) {
+            for (auto& c : v.vec) vals.push_back(val_to_double(c));
+        } else {
+            vals.push_back(val_to_double(v));
+        }
+    }
+    if (vals.size() < 2) return Value::make_error("variance: need at least 2 values");
+    double mean = 0;
+    for (auto v : vals) mean += v;
+    mean /= vals.size();
+    double var = 0;
+    for (auto v : vals) var += (v - mean) * (v - mean);
+    var /= (vals.size() - 1);
+    std::ostringstream oss;
+    oss << std::setprecision(10) << var;
+    return Value(BigRat(BigInt(oss.str()), BigInt(1)));
+}
+
+Value Evaluator::eval_stddev(const std::vector<Value>& args) {
+    Value v = eval_variance(args);
+    if (v.is_error()) return v;
+    return eval_sqrt(v);
+}
+
+Value Evaluator::eval_median(const std::vector<Value>& args) {
+    std::vector<double> vals;
+    for (auto& v : args) {
+        if (v.is_vector()) {
+            for (auto& c : v.vec) vals.push_back(val_to_double(c));
+        } else {
+            vals.push_back(val_to_double(v));
+        }
+    }
+    if (vals.empty()) return Value::make_error("median: no values");
+    std::sort(vals.begin(), vals.end());
+    double med;
+    size_t n = vals.size();
+    if (n % 2 == 1) med = vals[n / 2];
+    else med = (vals[n / 2 - 1] + vals[n / 2]) / 2.0;
+    std::ostringstream oss;
+    oss << std::setprecision(10) << med;
+    try { return Value(BigRat(oss.str())); }
+    catch (...) { return Value(BigFloat(med)); }
+}
+
+static std::string ast_to_string(ASTPtr node) {
+    if (!node) return "";
+    switch (node->type) {
+    case ASTNode::NUMBER: return node->number.to_string();
+    case ASTNode::CONSTANT: return node->name;
+    case ASTNode::VARIABLE: return node->name;
+    case ASTNode::BINOP: {
+        std::string l = ast_to_string(node->left);
+        std::string r = ast_to_string(node->right);
+        if (node->op == '+') return l + "+" + r;
+        if (node->op == '-') return l + "-" + r;
+        if (node->op == '*') return "(" + l + ")*(" + r + ")";
+        if (node->op == '/') return "(" + l + ")/(" + r + ")";
+        if (node->op == '^') return "(" + l + ")^(" + r + ")";
+        return l + "?" + r;
+    }
+    case ASTNode::UNARYOP:
+        return "-(" + ast_to_string(node->left) + ")";
+    case ASTNode::FUNCTION: {
+        std::string r = node->name + "(";
+        for (size_t i = 0; i < node->args.size(); i++) {
+            if (i > 0) r += ",";
+            r += ast_to_string(node->args[i]);
+        }
+        return r + ")";
+    }
+    default: return "?";
+    }
+}
+
+static bool is_poly_in_var(ASTPtr node, const std::string& var) {
+    if (!node) return true;
+    switch (node->type) {
+    case ASTNode::NUMBER: case ASTNode::CONSTANT: return true;
+    case ASTNode::VARIABLE: return node->name != var || true;
+    case ASTNode::BINOP: return is_poly_in_var(node->left, var) && is_poly_in_var(node->right, var);
+    case ASTNode::UNARYOP: return is_poly_in_var(node->left, var);
+    case ASTNode::FUNCTION: {
+        for (auto& a : node->args) if (!is_poly_in_var(a, var)) return false;
+        return true;
+    }
+    default: return false;
+    }
+}
+
+Value Evaluator::eval_simplify(ASTPtr node) {
+    Value result = eval_node(node);
+    if (result.is_error()) return result;
+    if (!node) return result;
+
+    if (node->type == ASTNode::BINOP && node->op == '/') {
+        Value num_val = eval_node(node->left);
+        Value den_val = eval_node(node->right);
+        if (!num_val.is_error() && !den_val.is_error()) {
+            Value simplified = num_val / den_val;
+            if (!simplified.is_error()) {
+                return Value::make_string(ast_to_string(node->left) + "/" + ast_to_string(node->right)
+                    + " = " + simplified.to_string());
+            }
+        }
+    }
+
+    return Value::make_string(ast_to_string(node) + " = " + result.to_string());
 }
 
 static std::vector<std::complex<double>> solve_cubic_d(double a, double b,
@@ -166,6 +462,19 @@ Value Evaluator::eval_node(ASTPtr node) {
             components.push_back(v);
         }
         return Value::make_vector(components);
+    }
+    case ASTNode::MAT_LITERAL: {
+        std::vector<std::vector<Value>> rows;
+        for (auto& row : node->mat_rows) {
+            std::vector<Value> r;
+            for (auto& arg : row) {
+                Value v = eval_node(arg);
+                if (v.is_error()) return v;
+                r.push_back(v);
+            }
+            rows.push_back(r);
+        }
+        return Value::make_matrix(rows);
     }
     }
     return Value::make_error("Unknown node type");
@@ -863,6 +1172,19 @@ Value Evaluator::substitute(ASTPtr node, const std::string& var, const Value& va
         }
         return Value::make_vector(components);
     }
+    case ASTNode::MAT_LITERAL: {
+        std::vector<std::vector<Value>> rows;
+        for (auto& row : node->mat_rows) {
+            std::vector<Value> r;
+            for (auto& arg : row) {
+                Value v = substitute(arg, var, val);
+                if (v.is_error()) return v;
+                r.push_back(v);
+            }
+            rows.push_back(r);
+        }
+        return Value::make_matrix(rows);
+    }
     }
     return Value::make_error("Cannot substitute");
 }
@@ -1450,6 +1772,57 @@ Value Evaluator::eval_function(ASTPtr node) {
     }
     if (name == "solve") {
         return eval_solve(args);
+    }
+    if (name == "matrix") {
+        return eval_matrix(args);
+    }
+    if (name == "det") {
+        if (args.size() != 1) return Value::make_error("det requires 1 argument");
+        return eval_det(eval_node(args[0]));
+    }
+    if (name == "inv") {
+        if (args.size() != 1) return Value::make_error("inv requires 1 argument");
+        return eval_inv(eval_node(args[0]));
+    }
+    if (name == "eigen") {
+        if (args.size() != 1) return Value::make_error("eigen requires 1 argument");
+        return eval_eigen(eval_node(args[0]));
+    }
+    if (name == "trace") {
+        if (args.size() != 1) return Value::make_error("trace requires 1 argument");
+        return eval_trace(eval_node(args[0]));
+    }
+    if (name == "transpose") {
+        if (args.size() != 1) return Value::make_error("transpose requires 1 argument");
+        return eval_transpose(eval_node(args[0]));
+    }
+    if (name == "identity" || name == "eye") {
+        if (args.size() != 1) return Value::make_error("identity requires 1 argument");
+        return eval_identity(eval_node(args[0]));
+    }
+    if (name == "mean") {
+        std::vector<Value> vals;
+        for (auto& a : args) { Value v = eval_node(a); if (v.is_error()) return v; vals.push_back(v); }
+        return eval_mean(vals);
+    }
+    if (name == "stddev") {
+        std::vector<Value> vals;
+        for (auto& a : args) { Value v = eval_node(a); if (v.is_error()) return v; vals.push_back(v); }
+        return eval_stddev(vals);
+    }
+    if (name == "variance") {
+        std::vector<Value> vals;
+        for (auto& a : args) { Value v = eval_node(a); if (v.is_error()) return v; vals.push_back(v); }
+        return eval_variance(vals);
+    }
+    if (name == "median") {
+        std::vector<Value> vals;
+        for (auto& a : args) { Value v = eval_node(a); if (v.is_error()) return v; vals.push_back(v); }
+        return eval_median(vals);
+    }
+    if (name == "simplify") {
+        if (args.size() != 1) return Value::make_error("simplify requires 1 argument");
+        return eval_simplify(args[0]);
     }
     return Value::make_error("Unknown function: " + name);
 }

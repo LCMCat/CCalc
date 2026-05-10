@@ -319,6 +319,10 @@ bool Value::is_zero() const {
         for (auto& c : vec) if (!c.is_zero()) return false;
         return true;
     }
+    if (type == MATRIX) {
+        for (auto& row : mat) for (auto& c : row) if (!c.is_zero()) return false;
+        return true;
+    }
     return false;
 }
 
@@ -346,6 +350,20 @@ std::string Value::to_string() const {
             r += vec[i].to_string();
         }
         r += ")";
+        return r;
+    }
+    if (type == MATRIX) {
+        std::string r = "[";
+        for (size_t i = 0; i < mat.size(); i++) {
+            if (i > 0) r += "; ";
+            r += "[";
+            for (size_t j = 0; j < mat[i].size(); j++) {
+                if (j > 0) r += ", ";
+                r += mat[i][j].to_string();
+            }
+            r += "]";
+        }
+        r += "]";
         return r;
     }
     if (type == SURDS) {
@@ -390,6 +408,21 @@ Value Value::operator+(const Value& o) const {
         }
         return make_error("Cannot add vector and scalar");
     }
+    if (type == MATRIX || o.type == MATRIX) {
+        if (type == MATRIX && o.type == MATRIX) {
+            if (mat_rows() != o.mat_rows() || mat_cols() != o.mat_cols())
+                return make_error("Matrix dimension mismatch in addition");
+            std::vector<std::vector<Value>> result;
+            for (int i = 0; i < mat_rows(); i++) {
+                std::vector<Value> row;
+                for (int j = 0; j < mat_cols(); j++)
+                    row.push_back(mat[i][j] + o.mat[i][j]);
+                result.push_back(row);
+            }
+            return make_matrix(result);
+        }
+        return make_error("Cannot add matrix and scalar");
+    }
     if (type == COMPLEX || o.type == COMPLEX) {
         Value r1 = type == COMPLEX ? *complex.real : *this;
         Value i1 = type == COMPLEX ? *complex.imag : Value(BigRat(0));
@@ -421,6 +454,21 @@ Value Value::operator-(const Value& o) const {
             return make_vector(result);
         }
         return make_error("Cannot subtract vector and scalar");
+    }
+    if (type == MATRIX || o.type == MATRIX) {
+        if (type == MATRIX && o.type == MATRIX) {
+            if (mat_rows() != o.mat_rows() || mat_cols() != o.mat_cols())
+                return make_error("Matrix dimension mismatch in subtraction");
+            std::vector<std::vector<Value>> result;
+            for (int i = 0; i < mat_rows(); i++) {
+                std::vector<Value> row;
+                for (int j = 0; j < mat_cols(); j++)
+                    row.push_back(mat[i][j] - o.mat[i][j]);
+                result.push_back(row);
+            }
+            return make_matrix(result);
+        }
+        return make_error("Cannot subtract matrix and scalar");
     }
     if (type == COMPLEX || o.type == COMPLEX) {
         Value r1 = type == COMPLEX ? *complex.real : *this;
@@ -454,6 +502,40 @@ Value Value::operator*(const Value& o) const {
         std::vector<Value> result;
         for (auto& c : o.vec) result.push_back(*this * c);
         return make_vector(result);
+    }
+    if (type == MATRIX && o.type == MATRIX) {
+        if (mat_cols() != o.mat_rows())
+            return make_error("Matrix dimension mismatch in multiplication");
+        std::vector<std::vector<Value>> result;
+        for (int i = 0; i < mat_rows(); i++) {
+            std::vector<Value> row;
+            for (int j = 0; j < o.mat_cols(); j++) {
+                Value sum(BigRat(0));
+                for (int k = 0; k < mat_cols(); k++)
+                    sum = sum + mat[i][k] * o.mat[k][j];
+                row.push_back(sum);
+            }
+            result.push_back(row);
+        }
+        return make_matrix(result);
+    }
+    if (type == MATRIX) {
+        std::vector<std::vector<Value>> result;
+        for (auto& row : mat) {
+            std::vector<Value> nr;
+            for (auto& c : row) nr.push_back(c * o);
+            result.push_back(nr);
+        }
+        return make_matrix(result);
+    }
+    if (o.type == MATRIX) {
+        std::vector<std::vector<Value>> result;
+        for (auto& row : o.mat) {
+            std::vector<Value> nr;
+            for (auto& c : row) nr.push_back(*this * c);
+            result.push_back(nr);
+        }
+        return make_matrix(result);
     }
     if (type == COMPLEX || o.type == COMPLEX) {
         Value r1 = type == COMPLEX ? *complex.real : *this;
