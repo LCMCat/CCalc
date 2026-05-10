@@ -148,17 +148,103 @@ BigInt BigInt::operator*(const BigInt& o) const {
     if (is_zero() || o.is_zero()) return BigInt(0);
     BigInt res;
     res.neg_ = neg_ != o.neg_;
-    res.digits_.assign(digits_.size() + o.digits_.size(), 0);
-    for (size_t i = 0; i < digits_.size(); i++) {
-        int64_t carry = 0;
-        for (size_t j = 0; j < o.digits_.size() || carry; j++) {
-            int64_t cur = res.digits_[i + j] + carry;
-            if (j < o.digits_.size()) cur += digits_[i] * o.digits_[j];
-            res.digits_[i + j] = cur % BASE;
-            carry = cur / BASE;
+    const BigInt& a = *this;
+    const BigInt& b = o;
+    int n = (int)std::max(a.digits_.size(), b.digits_.size());
+    if (n < 64) {
+        res.digits_.assign(a.digits_.size() + b.digits_.size(), 0);
+        for (size_t i = 0; i < a.digits_.size(); i++) {
+            int64_t carry = 0;
+            for (size_t j = 0; j < b.digits_.size() || carry; j++) {
+                int64_t cur = res.digits_[i + j] + carry;
+                if (j < b.digits_.size()) cur += a.digits_[i] * b.digits_[j];
+                res.digits_[i + j] = cur % BASE;
+                carry = cur / BASE;
+            }
         }
+        res.trim();
+        return res;
     }
+    res.digits_ = karatsuba(a.digits_, b.digits_);
     res.trim();
+    return res;
+}
+
+std::vector<int64_t> BigInt::karatsuba(const std::vector<int64_t>& x,
+                                        const std::vector<int64_t>& y) {
+    size_t n = std::max(x.size(), y.size());
+    if (n < 32) {
+        std::vector<int64_t> res(x.size() + y.size(), 0);
+        for (size_t i = 0; i < x.size(); i++) {
+            int64_t carry = 0;
+            for (size_t j = 0; j < y.size() || carry; j++) {
+                int64_t cur = res[i + j] + carry;
+                if (j < y.size()) cur += x[i] * y[j];
+                res[i + j] = cur % BASE;
+                carry = cur / BASE;
+            }
+        }
+        while (res.size() > 1 && res.back() == 0) res.pop_back();
+        return res;
+    }
+    size_t m = n / 2;
+    std::vector<int64_t> x0(x.begin(), x.begin() + std::min(m, x.size()));
+    std::vector<int64_t> y0(y.begin(), y.begin() + std::min(m, y.size()));
+    std::vector<int64_t> x1(x.begin() + std::min(m, x.size()), x.end());
+    std::vector<int64_t> y1(y.begin() + std::min(m, y.size()), y.end());
+    if (x0.empty()) x0.push_back(0);
+    if (y0.empty()) y0.push_back(0);
+    if (x1.empty()) x1.push_back(0);
+    if (y1.empty()) y1.push_back(0);
+    auto z0 = karatsuba(x0, y0);
+    auto z2 = karatsuba(x1, y1);
+    auto xs = add_vec(x0, x1);
+    auto ys = add_vec(y0, y1);
+    auto z1_full = karatsuba(xs, ys);
+    auto z1 = sub_vec(sub_vec(z1_full, z0), z2);
+    auto result = add_vec(z0, shift(z1, m));
+    result = add_vec(result, shift(z2, 2 * m));
+    return result;
+}
+
+std::vector<int64_t> BigInt::add_vec(const std::vector<int64_t>& a,
+                                      const std::vector<int64_t>& b) {
+    std::vector<int64_t> res;
+    int64_t carry = 0;
+    size_t i = 0;
+    while (i < a.size() || i < b.size() || carry) {
+        int64_t sum = carry;
+        if (i < a.size()) sum += a[i];
+        if (i < b.size()) sum += b[i];
+        res.push_back(sum % BASE);
+        carry = sum / BASE;
+        i++;
+    }
+    return res;
+}
+
+std::vector<int64_t> BigInt::sub_vec(const std::vector<int64_t>& a,
+                                      const std::vector<int64_t>& b) {
+    std::vector<int64_t> res;
+    int64_t borrow = 0;
+    for (size_t i = 0; i < a.size(); i++) {
+        int64_t diff = a[i] - borrow;
+        if (i < b.size()) diff -= b[i];
+        if (diff < 0) {
+            diff += BASE;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        res.push_back(diff);
+    }
+    while (res.size() > 1 && res.back() == 0) res.pop_back();
+    return res;
+}
+
+std::vector<int64_t> BigInt::shift(const std::vector<int64_t>& v, size_t offset) {
+    std::vector<int64_t> res(offset, 0);
+    res.insert(res.end(), v.begin(), v.end());
     return res;
 }
 

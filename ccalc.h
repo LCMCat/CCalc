@@ -90,6 +90,14 @@ private:
     BigInt raw_sub(const BigInt& o) const;
     int raw_compare(const BigInt& o) const;
 
+    static std::vector<int64_t> karatsuba(const std::vector<int64_t>& x,
+                                           const std::vector<int64_t>& y);
+    static std::vector<int64_t> add_vec(const std::vector<int64_t>& a,
+                                         const std::vector<int64_t>& b);
+    static std::vector<int64_t> sub_vec(const std::vector<int64_t>& a,
+                                         const std::vector<int64_t>& b);
+    static std::vector<int64_t> shift(const std::vector<int64_t>& v, size_t offset);
+
 public:
     std::pair<BigInt, BigInt> divmod(const BigInt& o) const;
 };
