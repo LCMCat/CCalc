@@ -328,6 +328,7 @@ public:
     BigRat to_rational() const;
     BigFloat to_float(int prec = 0) const;
     std::string to_string() const;
+    std::string to_latex() const;
 
     Value operator+(const Value& o) const;
     Value operator-(const Value& o) const;
@@ -345,6 +346,7 @@ public:
 enum class TokenType {
     NUMBER, IDENTIFIER, PLUS, MINUS, STAR, SLASH, CARET, PERCENT,
     LPAREN, RPAREN, LBRACKET, RBRACKET, COMMA, SEMICOLON, BANG, EQUAL, LT, GT, LE, GE, NEQ,
+    COLON_EQUAL,
     END_OF_INPUT, ERROR
 };
 
@@ -513,13 +515,32 @@ public:
 
     Value get_last_ans() const { return last_ans_; }
 
+    void set_user_function(const std::string& name, const std::vector<std::string>& params, ASTPtr body) {
+        user_functions_[name] = {params, body};
+    }
+    bool has_user_function(const std::string& name) const {
+        return user_functions_.find(name) != user_functions_.end();
+    }
+    std::pair<std::vector<std::string>, ASTPtr> get_user_function(const std::string& name) const {
+        auto it = user_functions_.find(name);
+        if (it != user_functions_.end()) return it->second;
+        return {};
+    }
+
+    void set_latex_mode(bool m) { latex_mode_ = m; }
+    bool latex_mode() const { return latex_mode_; }
+
     static std::string format_result(const Value& v, int base = 10);
+    static std::string format_latex(const Value& v);
+    static std::string format_pretty_matrix(const Value& v);
 
 private:
     AngleMode angle_mode_;
     int output_base_;
+    bool latex_mode_ = false;
     std::map<std::string, Value> variables_;
     std::map<std::string, Value> vec_variables_;
+    std::map<std::string, std::pair<std::vector<std::string>, ASTPtr>> user_functions_;
     Value last_ans_;
 
     Value eval_node(ASTPtr node);
@@ -593,6 +614,12 @@ private:
     Value eval_median(const std::vector<Value>& args);
 
     Value eval_simplify(ASTPtr node);
+
+    ASTPtr sdiff(ASTPtr node, const std::string& var);
+    Value eval_taylor(ASTPtr node);
+    Value eval_limit(ASTPtr node);
+    Value eval_inttable(ASTPtr node);
+    Value eval_recur(ASTPtr node);
 
     Value try_exact_trig(const BigRat& pi_coeff, int func);
     Value substitute(ASTPtr node, const std::string& var, const Value& val);

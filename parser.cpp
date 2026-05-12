@@ -15,7 +15,8 @@ static const std::vector<std::string> known_functions = {
     "vecmod", "dot", "cross", "scalarmul", "mixed", "proj", "decompose",
     "matrix", "det", "inv", "eigen", "trace", "transpose", "identity",
     "mean", "stddev", "variance", "median",
-    "simplify"
+    "simplify",
+    "taylor", "limit", "inttable", "recur"
 };
 
 static bool is_known_function(const std::string& name) {
@@ -130,6 +131,13 @@ std::vector<Token> Lexer::tokenize() {
             case ',': tokens.push_back(Token(TokenType::COMMA, ",", pos_)); pos_++; break;
             case ';': tokens.push_back(Token(TokenType::SEMICOLON, ";", pos_)); pos_++; break;
             case '!': tokens.push_back(Token(TokenType::BANG, "!", pos_)); pos_++; break;
+            case ':':
+                if (pos_ + 1 < (int)input_.size() && input_[pos_ + 1] == '=') {
+                    tokens.push_back(Token(TokenType::COLON_EQUAL, ":=", pos_)); pos_ += 2;
+                } else {
+                    tokens.push_back(Token(TokenType::ERROR, ":", pos_)); pos_++;
+                }
+                break;
             case '=': tokens.push_back(Token(TokenType::EQUAL, "=", pos_)); pos_++; break;
             case '<':
                 if (pos_ + 1 < (int)input_.size() && input_[pos_ + 1] == '=') {

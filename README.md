@@ -21,6 +21,11 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 - Assignment: `x=1`, `x=sin(pi/2)`, `A=10`
 - Usage in expressions: `sin(x/2)` when `x=pi` → `1`
 
+### Custom Functions
+- Define: `f(x) := x^2+1`, `g(x,y) := x*y+1`
+- Call: `f(3)` → `10`, `g(2,5)` → `11`
+- Works with all built-in functions: `h(x) := sin(x)+cos(x)`
+
 ### Vectors
 - `VerA`, `VerB`, `VerC`, `VerD` — user-assignable vector variables (default: empty)
 - Assignment: `VerA=(1,2,3)`, `VerB=(1,2)`
@@ -39,6 +44,7 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 ### Number Bases
 - Input prefixes: `0b1010` (binary), `0o77` (octal), `0xFF` (hex)
 - Output base: `base 2` / `base 8` / `base 16` / `base N` (2–36)
+- Direct base arithmetic: `0b101+0b110` → `11`
 - Example: `base 16; 255` → `FF`
 
 ### Trigonometric
@@ -65,9 +71,16 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 
 ### Calculus
 - `int(expr, var, a, b)` — definite integral (Simpson's rule)
-- `diff(expr, var, point)` — numerical derivative (5-point central difference)
+- `diff(expr, var)` — **symbolic** derivative: `diff(x^2, x)` → `2*x`
+- `diff(expr, var, point)` — numerical derivative at a point
+- `taylor(expr, var, point, n)` — Taylor expansion: `taylor(sin(x), x, 0, 5)` → `x - x³/6 + x⁵/120`
+- `limit(expr, var, val)` — numerical limit: `limit(sin(x)/x, x, 0)` → `1`
 - `sum(expr, var, from, to)` — summation
 - `prod(expr, var, from, to)` — product
+
+### Integration Table
+- `inttable(expr)` — look up antiderivative of common functions
+- Supports: x^n, sin(x), cos(x), exp(x), ln(x), 1/x, and combinations via sum/difference rule
 
 ### Complex Numbers
 - `complex(a, b)` — construct `a + bi`
@@ -97,6 +110,7 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 - `trace(m)` — trace
 - `transpose(m)` — transpose
 - `identity(n)` or `eye(n)` — n×n identity matrix
+- **Pretty output** with Unicode box-drawing characters
 
 ### Statistics
 - `mean(a,b,c,...)` — arithmetic mean
@@ -108,10 +122,28 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 - `simplify(expr)` — evaluate and show simplified result
 - Example: `simplify(6/3)` → `6/3 = 2`
 
+### Recursive Sequences
+- `recur(expr, var, init, n)` — compute n-th term of recurrence
+- Example: `recur(a+1, a, 1, 5)` → `6` (arithmetic: 1,2,3,4,5,6)
+- Example: `recur(a*2, a, 1, 10)` → `1024` (geometric: 1,2,4,...,1024)
+
+### LaTeX Output
+- `latex` command toggles LaTeX formatting mode
+- Fractions: `1/2` → `\frac{1}{2}`
+- Square roots: `sqrt(2)` → `\sqrt{2}`
+- Powers: `x^2` → `x^{2}`
+- Matrices: `\begin{pmatrix}1 & 2 \\ 3 & 4\end{pmatrix}`
+- Greek letters: `pi` → `\pi`
+
 ### Batch Mode
 - `ccalc -f file.txt` — read expressions from file, output results line by line
 - Lines starting with `#` are comments
 - Variable assignments work in batch mode
+
+### REPL Features
+- **History navigation**: Up/Down arrow keys to browse previous inputs
+- **Tab completion**: Type `si` + Tab → `sin(`
+- **Syntax highlighting**: numbers (gray), functions (green), operators (yellow)
 
 ### Function Graphing
 - `graph(expr)` — plot y=expr (e.g. `graph(sin(x))`, `graph(x^2-3*x+1)`)
@@ -128,6 +160,7 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
   - Four graph types: explicit y=f(x), implicit f(x,y)=0, parametric, polar
   - Implicit uses Marching Squares algorithm for smooth contours
   - Zoom (scroll wheel), pan (left-drag), hover for coordinates
+  - 1:1 aspect ratio for accurate shapes
   - Auto Y-range, grid, axis display
   - Angle mode (radians/degrees)
   - Expression syntax identical to the calculator
@@ -175,12 +208,18 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 | `stddev(1,2,3,4,5)` | `sqrt(2) ~= 1.414...` |
 | `median(1,2,3,4,5)` | `3` |
 | `simplify(6/3)` | `6/3 = 2` |
+| `diff(x^2, x)` | `2*x` |
+| `taylor(sin(x), x, 0, 5)` | `x - x³/6 + x⁵/120` |
+| `limit(sin(x)/x, x, 0)` | `1` |
+| `f(x) := x^2+1; f(3)` | `10` |
+| `recur(a+1, a, 1, 5)` | `6` |
 
 ## Build
 
 ### Prerequisites
 - C++17 compatible compiler (GCC ≥ 9, Clang ≥ 10, MSVC ≥ 2019)
 - Make
+- DirectX 11 (for graph window, Windows only)
 
 ### Compile
 
@@ -204,61 +243,10 @@ Run the calculator:
 ./ccalc
 ```
 
-### Interactive Session
+### Batch Mode
 
-```
-CCalc v1.0 - Command-line Advanced Calculator
-Type 'help' for help, 'quit' to exit.
-
-CCalc> sin(pi/2)
-1
-CCalc> 2^100
-1267650600228229401496703205376
-CCalc> 100!
-93326215443944152681699238856266700490715968264381621468592963895217599993229915608941463976156518286253697920827223758251185210916864000000000000000000000000
-CCalc> log(2, sqrt(sin(pi/(2+5)^0)))
-Error: log(0) is undefined
-CCalc> complex(3,4) * complex(1,2)
--5 + 10*i
-CCalc> x=pi
-x = pi ~= 3.14159...
-CCalc> sin(x/2)
-1
-CCalc> 0xFF
-255
-CCalc> base 16
-Output base set to 16
-CCalc> 255
-FF
-CCalc> VerA=(1,2,3)
-VerA = (1, 2, 3)
-CCalc> vecmod(VerA)
-sqrt(14) ~= 3.74165738677394138558374873231654930176
-CCalc> dot(VerA,(4,5,6))
-32
-CCalc> cross(VerA,(4,5,6))
-(-3, 6, -3)
-CCalc> 3*VerA
-(3, 6, 9)
-CCalc> proj((1,2),(3,4))
-(33/25 (= 1.32), 44/25 (= 1.76))
-CCalc> x=1, x+1, 2/2, 1-2*5
-x = 1
-2
-1
--9
-CCalc> sin(pi/2), cos(pi/3), log(2,8)
-1
-1/2 (= 0.5)
-3
-CCalc> solve(1,2,1)
-(-1, -1)
-CCalc> solve(1,-1,-1)
-(sqrt(5)/2 + 1/2 ~= 1.618..., -sqrt(5)/2 + 1/2 ~= -0.618...)
-CCalc> solve(1,0,1)
-(i, -i)
-CCalc> quit
-Goodbye!
+```bash
+./ccalc -f expressions.txt
 ```
 
 ### Commands
@@ -269,10 +257,38 @@ Goodbye!
 | `rad` | Switch to radian mode |
 | `base N` | Set output base (2–36) |
 | `prec N` | Set precision to N digits (1–10000) |
+| `latex` | Toggle LaTeX output mode |
 | `ans` | Last answer |
 | `graph(expr)` | Plot function y=expr |
 | `help` | Show help |
 | `quit` / `exit` | Exit |
+
+### Interactive Session
+
+```
+CCalc v2.0 - Command-line Advanced Calculator
+Type 'help' for help, 'quit' to exit.
+Up/Down: history, Tab: complete, latex: toggle LaTeX mode
+
+CCalc> diff(x^3, x)
+3*x^2
+CCalc> taylor(exp(x), x, 0, 4)
+1 + 1*x + 1/2*x^2 + 1/6*x^3 + 1/24*x^4
+CCalc> f(x) := x^2+1
+Defined: f(x) = x^2+1
+CCalc> f(3)
+10
+CCalc> limit(sin(x)/x, x, 0)
+1
+CCalc> latex
+LaTeX mode: ON
+CCalc> 1/2
+\frac{1}{2}
+CCalc> det([1,2;3,4])
+-2
+CCalc> quit
+Goodbye!
+```
 
 ## Architecture
 
@@ -291,7 +307,7 @@ Goodbye!
 | `BigRat` | Arbitrary-precision rational (auto-simplified) |
 | `BigFloat` | Arbitrary-precision float (scientific notation) |
 | `SurdsExpr` | Exact symbolic expression (radicals + π + e) |
-| `Value` | Discriminated union: SURDS / FLOAT / COMPLEX / VECTOR / STRING / ERROR |
+| `Value` | Discriminated union: SURDS / FLOAT / COMPLEX / VECTOR / MATRIX / STRING / ERROR |
 
 ### Key Design Decisions
 
@@ -299,6 +315,7 @@ Goodbye!
 - **Exact-first evaluation**: operations stay in the exact (SurdsExpr) domain as long as possible, falling back to BigFloat only when necessary.
 - **No external dependencies**: all high-precision arithmetic is implemented from scratch.
 - **Hard-coded constants**: π, e, ln(2) are stored with 1000+ digits for maximum accuracy.
+- **Symbolic differentiation**: AST transformation approach, supporting chain rule, product rule, quotient rule.
 
 ## License
 

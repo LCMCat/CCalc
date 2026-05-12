@@ -1,5 +1,6 @@
 #include "ccalc.h"
 #include <fstream>
+#include <conio.h>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -13,6 +14,33 @@ static bool is_assignable_var(const std::string& name) {
 
 static bool is_vec_var(const std::string& name) {
     return name == "VerA" || name == "VerB" || name == "VerC" || name == "VerD";
+}
+
+static const std::vector<std::string> all_function_names = {
+    "sin", "cos", "tan", "asin", "acos", "atan",
+    "sinh", "cosh", "tanh",
+    "sqrt", "cbrt", "nrt",
+    "abs", "ln", "lg", "log",
+    "fact", "perm", "P", "comb", "C",
+    "gcd", "lcm", "factor",
+    "int", "diff", "sum", "prod",
+    "complex", "re", "im", "conj", "arg", "mod",
+    "rand", "randint",
+    "convert", "solve",
+    "deg", "rad",
+    "vecmod", "dot", "cross", "scalarmul", "mixed", "proj", "decompose",
+    "matrix", "det", "inv", "eigen", "trace", "transpose", "identity",
+    "mean", "stddev", "variance", "median",
+    "simplify", "exp", "floor", "ceil", "round", "sign", "max", "min",
+    "pow", "root", "log2", "atan2", "hypot",
+    "taylor", "limit", "inttable", "recur"
+};
+
+static bool is_known_func(const std::string& name) {
+    for (auto& f : all_function_names) {
+        if (f == name) return true;
+    }
+    return false;
 }
 
 static void print_help() {
@@ -44,8 +72,18 @@ static void print_help() {
     std::cout << "Calculus:" << std::endl;
     std::cout << "  int(expr, var, a, b)            - Definite integral" << std::endl;
     std::cout << "  diff(expr, var, point)          - Derivative at point" << std::endl;
+    std::cout << "  diff(expr, var)                 - Symbolic derivative" << std::endl;
+    std::cout << "  taylor(expr, var, point, n)     - Taylor expansion" << std::endl;
+    std::cout << "  limit(expr, var, val)           - Numerical limit" << std::endl;
+    std::cout << "  inttable(expr)                  - Integration table lookup" << std::endl;
     std::cout << "  sum(expr, var, from, to)        - Summation" << std::endl;
     std::cout << "  prod(expr, var, from, to)       - Product" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Sequences:" << std::endl;
+    std::cout << "  recur(expr, var, init, n)       - Recursive sequence" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Custom functions:" << std::endl;
+    std::cout << "  f(x) := x^2+1                  - Define custom function" << std::endl;
     std::cout << std::endl;
     std::cout << "Complex:" << std::endl;
     std::cout << "  complex(a, b)                   - Complex number a+bi" << std::endl;
@@ -93,24 +131,23 @@ static void print_help() {
     std::cout << "  deg / rad                       - Set angle mode" << std::endl;
     std::cout << "  base N                          - Set output base (2-36)" << std::endl;
     std::cout << "  prec N                          - Set precision (digits)" << std::endl;
+    std::cout << "  latex                           - Toggle LaTeX output mode" << std::endl;
     std::cout << "  ans                             - Last answer" << std::endl;
     std::cout << "  help                            - Show this help" << std::endl;
     std::cout << "  quit / exit                     - Exit program" << std::endl;
     std::cout << std::endl;
+    std::cout << "REPL:" << std::endl;
+    std::cout << "  Up/Down                         - Navigate history" << std::endl;
+    std::cout << "  Tab                             - Complete function name" << std::endl;
+    std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  sin(pi/2)        => 1" << std::endl;
     std::cout << "  cos(pi/3)        => 1/2" << std::endl;
-    std::cout << "  log(2, 8)        => 3" << std::endl;
-    std::cout << "  10!              => 3628800" << std::endl;
-    std::cout << "  C(10,3)          => 120" << std::endl;
-    std::cout << "  sqrt(2)          => sqrt(2) ~= 1.414..." << std::endl;
-    std::cout << "  sum(k^2, k, 1, 10)  => 385" << std::endl;
-    std::cout << "  x=pi, sin(x/2)   => 1" << std::endl;
-    std::cout << "  0xFF             => 255" << std::endl;
-    std::cout << "  base 16, 255     => FF" << std::endl;
-    std::cout << "  VerA=(1,2,3)     => (1, 2, 3)" << std::endl;
-    std::cout << "  vecmod(VerA)      => sqrt(14)" << std::endl;
-    std::cout << "  dot(VerA,VerB)    => dot product" << std::endl;
+    std::cout << "  diff(x^2, x)     => 2*x" << std::endl;
+    std::cout << "  taylor(sin(x), x, 0, 5)  => x - x^3/6 + x^5/120" << std::endl;
+    std::cout << "  f(x) := x^2+1    => defines f" << std::endl;
+    std::cout << "  f(3)             => 10" << std::endl;
+    std::cout << "  0b101+0b110      => 11" << std::endl;
 }
 
 static std::string trim(const std::string& s) {
@@ -202,10 +239,231 @@ static GraphCmd parse_graph_cmd(const std::string& input) {
     return cmd;
 }
 
+static std::string syntax_highlight(const std::string& input) {
+    std::string result;
+    size_t i = 0;
+    while (i < input.size()) {
+        if (std::isdigit(input[i]) || (input[i] == '.' && i + 1 < input.size() && std::isdigit(input[i+1]))) {
+            if (i + 1 < input.size() && (input[i+1] == 'b' || input[i+1] == 'B' ||
+                input[i+1] == 'o' || input[i+1] == 'O' ||
+                input[i+1] == 'x' || input[i+1] == 'X') && input[i] == '0') {
+                std::string num;
+                num += input[i]; i++;
+                num += input[i]; i++;
+                while (i < input.size() && (std::isxdigit(input[i]) || input[i] == '.')) {
+                    num += input[i]; i++;
+                }
+                result += "\033[90m" + num + "\033[0m";
+            } else {
+                std::string num;
+                while (i < input.size() && (std::isdigit(input[i]) || input[i] == '.')) {
+                    num += input[i]; i++;
+                }
+                result += "\033[90m" + num + "\033[0m";
+            }
+        } else if (std::isalpha(input[i]) || input[i] == '_') {
+            std::string ident;
+            while (i < input.size() && (std::isalnum(input[i]) || input[i] == '_')) {
+                ident += input[i]; i++;
+            }
+            if (is_known_func(ident)) {
+                result += "\033[32m" + ident + "\033[0m";
+            } else if (ident == "pi" || ident == "PI" || ident == "e" || ident == "E") {
+                result += "\033[90m" + ident + "\033[0m";
+            } else {
+                result += ident;
+            }
+        } else if (input[i] == '+' || input[i] == '-' || input[i] == '*' ||
+                   input[i] == '/' || input[i] == '^' || input[i] == '%') {
+            result += "\033[33m" + std::string(1, input[i]) + "\033[0m";
+            i++;
+        } else {
+            result += input[i];
+            i++;
+        }
+    }
+    return result;
+}
+
+static std::string readline_custom(const std::string& prompt,
+                                    std::vector<std::string>& history,
+                                    int& history_idx) {
+    std::string line;
+    int cursor = 0;
+
+    std::cout << prompt << std::flush;
+
+    while (true) {
+        int ch = _getch();
+
+        if (ch == '\r' || ch == '\n') {
+            std::cout << std::endl;
+            if (!line.empty()) {
+                bool found = false;
+                for (auto& h : history) {
+                    if (h == line) { found = true; break; }
+                }
+                if (!found) history.push_back(line);
+            }
+            history_idx = (int)history.size();
+            return line;
+        }
+
+        if (ch == '\b' || ch == 127) {
+            if (cursor > 0) {
+                line.erase(cursor - 1, 1);
+                cursor--;
+                std::cout << "\r" << prompt << syntax_highlight(line)
+                          << std::string(line.size() - cursor + 1, ' ');
+                if (line.size() - cursor + 1 > 0) {
+                    std::cout << "\033[" << (line.size() - cursor + 1) << "D";
+                }
+                std::cout << std::flush;
+                int target = cursor + (int)prompt.size();
+                std::cout << "\r\033[" << target << "C" << std::flush;
+            }
+            continue;
+        }
+
+        if (ch == 0x00 || ch == 0xE0) {
+            int ch2 = _getch();
+            if (ch2 == 0x48) {
+                if (history_idx > 0) {
+                    history_idx--;
+                    line = history[history_idx];
+                    cursor = (int)line.size();
+                    std::cout << "\r" << prompt << syntax_highlight(line)
+                              << std::string(20, ' ') << "\r";
+                    std::cout << prompt << syntax_highlight(line) << std::flush;
+                }
+            } else if (ch2 == 0x50) {
+                if (history_idx < (int)history.size() - 1) {
+                    history_idx++;
+                    line = history[history_idx];
+                } else {
+                    history_idx = (int)history.size();
+                    line.clear();
+                }
+                cursor = (int)line.size();
+                std::cout << "\r" << prompt << syntax_highlight(line)
+                          << std::string(20, ' ') << "\r";
+                std::cout << prompt << syntax_highlight(line) << std::flush;
+            } else if (ch2 == 0x4D) {
+                if (cursor < (int)line.size()) {
+                    cursor++;
+                    std::cout << "\033[C" << std::flush;
+                }
+            } else if (ch2 == 0x4B) {
+                if (cursor > 0) {
+                    cursor--;
+                    std::cout << "\033[D" << std::flush;
+                }
+            }
+            continue;
+        }
+
+        if (ch == '\t') {
+            std::string word;
+            int ws = cursor - 1;
+            while (ws >= 0 && (std::isalnum(line[ws]) || line[ws] == '_')) ws--;
+            ws++;
+            word = line.substr(ws, cursor - ws);
+            if (!word.empty()) {
+                std::vector<std::string> matches;
+                for (auto& fn : all_function_names) {
+                    if (fn.size() >= word.size() && fn.substr(0, word.size()) == word) {
+                        matches.push_back(fn);
+                    }
+                }
+                if (matches.size() == 1) {
+                    std::string completion = matches[0].substr(word.size());
+                    line.insert(cursor, completion);
+                    cursor += (int)completion.size();
+                    std::cout << "\r" << prompt << syntax_highlight(line)
+                              << std::string(20, ' ') << "\r";
+                    std::cout << prompt << syntax_highlight(line) << std::flush;
+                } else if (matches.size() > 1) {
+                    std::string common_prefix = matches[0];
+                    for (auto& m : matches) {
+                        size_t j = 0;
+                        while (j < common_prefix.size() && j < m.size() && common_prefix[j] == m[j]) j++;
+                        common_prefix = common_prefix.substr(0, j);
+                    }
+                    if (common_prefix.size() > word.size()) {
+                        std::string completion = common_prefix.substr(word.size());
+                        line.insert(cursor, completion);
+                        cursor += (int)completion.size();
+                    }
+                    std::cout << "\r" << prompt << syntax_highlight(line)
+                              << std::string(20, ' ') << "\r";
+                    std::cout << prompt << syntax_highlight(line) << std::flush;
+                }
+            }
+            continue;
+        }
+
+        if (ch >= 32 && ch < 127) {
+            line.insert(cursor, 1, (char)ch);
+            cursor++;
+            std::cout << "\r" << prompt << syntax_highlight(line)
+                      << std::string(20, ' ') << "\r";
+            std::cout << prompt << syntax_highlight(line) << std::flush;
+            int target = cursor + (int)prompt.size();
+            std::cout << "\r\033[" << target << "C" << std::flush;
+        }
+    }
+}
+
+static bool parse_custom_function(const std::string& input, Evaluator& evaluator) {
+    size_t ce_pos = input.find(":=");
+    if (ce_pos == std::string::npos) return false;
+    std::string lhs = trim(input.substr(0, ce_pos));
+    std::string rhs = trim(input.substr(ce_pos + 2));
+    if (rhs.empty()) return false;
+
+    size_t lp = lhs.find('(');
+    size_t rp = lhs.find(')');
+    if (lp == std::string::npos || rp == std::string::npos || rp <= lp + 1) return false;
+
+    std::string func_name = trim(lhs.substr(0, lp));
+    if (func_name.empty() || is_known_func(func_name)) return false;
+
+    std::string params_str = lhs.substr(lp + 1, rp - lp - 1);
+    std::vector<std::string> params;
+    std::istringstream ps(params_str);
+    std::string p;
+    while (std::getline(ps, p, ',')) {
+        p = trim(p);
+        if (!p.empty()) params.push_back(p);
+    }
+    if (params.empty()) return false;
+
+    try {
+        Lexer lexer(rhs);
+        auto tokens = lexer.tokenize();
+        Parser parser(tokens);
+        ASTPtr body = parser.parse();
+        evaluator.set_user_function(func_name, params, body);
+        std::cout << "Defined " << func_name << "(";
+        for (size_t i = 0; i < params.size(); i++) {
+            if (i > 0) std::cout << ",";
+            std::cout << params[i];
+        }
+        std::cout << ") := " << rhs << std::endl;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode = 0;
+    GetConsoleMode(hOut, &mode);
+    SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 #endif
 
     if (argc >= 3 && std::string(argv[1]) == "-f") {
@@ -226,21 +484,26 @@ int main(int argc, char* argv[]) {
                     if (part.empty()) continue;
                     GraphCmd gcmd = parse_graph_cmd(part);
                     if (gcmd.type != GraphCmd::NONE) continue;
+                    if (parse_custom_function(part, evaluator)) continue;
                     size_t eq_pos = part.find('=');
                     if (eq_pos != std::string::npos && eq_pos > 0) {
                         std::string lhs = trim(part.substr(0, eq_pos));
-                        std::string rhs = trim(part.substr(eq_pos + 1));
+                        std::string rhs_str = trim(part.substr(eq_pos + 1));
                         if (lhs == "x" || lhs == "y" || lhs == "A" || lhs == "B" || lhs == "C" || lhs == "D") {
-                            evaluator.set_variable(lhs, evaluator.evaluate(rhs));
+                            evaluator.set_variable(lhs, evaluator.evaluate(rhs_str));
                             continue;
                         }
                         if (lhs == "VerA" || lhs == "VerB" || lhs == "VerC" || lhs == "VerD") {
-                            evaluator.set_vec_variable(lhs, evaluator.evaluate(rhs));
+                            evaluator.set_vec_variable(lhs, evaluator.evaluate(rhs_str));
                             continue;
                         }
                     }
                     Value result = evaluator.evaluate(part);
-                    std::cout << evaluator.format_result(result) << std::endl;
+                    if (evaluator.latex_mode()) {
+                        std::cout << Evaluator::format_latex(result) << std::endl;
+                    } else {
+                        std::cout << evaluator.format_result(result) << std::endl;
+                    }
                 }
             } catch (const std::exception& e) {
                 std::cout << "Error: " << e.what() << std::endl;
@@ -249,16 +512,17 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    std::cout << "CCalc v1.0 - Command-line Advanced Calculator" << std::endl;
+    std::cout << "CCalc v2.0 - Command-line Advanced Calculator" << std::endl;
     std::cout << "Type 'help' for help, 'quit' to exit." << std::endl;
+    std::cout << "Up/Down: history, Tab: complete, latex: toggle LaTeX mode" << std::endl;
     std::cout << std::endl;
 
     Evaluator evaluator;
-    std::string line;
+    std::vector<std::string> history;
+    int history_idx = 0;
 
     while (true) {
-        std::cout << "CCalc> " << std::flush;
-        if (!std::getline(std::cin, line)) break;
+        std::string line = readline_custom("CCalc> ", history, history_idx);
         line = trim(line);
         if (line.empty()) continue;
 
@@ -281,6 +545,11 @@ int main(int argc, char* argv[]) {
         if (lower == "rad") {
             evaluator.set_angle_mode(Evaluator::RAD);
             std::cout << "Angle mode: radians" << std::endl;
+            continue;
+        }
+        if (lower == "latex") {
+            evaluator.set_latex_mode(!evaluator.latex_mode());
+            std::cout << "LaTeX mode: " << (evaluator.latex_mode() ? "ON" : "OFF") << std::endl;
             continue;
         }
         if (lower.substr(0, 5) == "base ") {
@@ -317,6 +586,8 @@ int main(int argc, char* argv[]) {
             for (size_t pi = 0; pi < parts.size(); pi++) {
                 const std::string& part = parts[pi];
                 if (part.empty()) continue;
+
+                if (parse_custom_function(part, evaluator)) continue;
 
                 GraphCmd gcmd = parse_graph_cmd(part);
                 if (gcmd.type != GraphCmd::NONE) {
@@ -362,8 +633,14 @@ int main(int argc, char* argv[]) {
                     }
                 }
                 Value result = evaluator.evaluate(part);
-                std::cout << Evaluator::format_result(result, evaluator.output_base())
-                          << std::endl;
+                if (evaluator.latex_mode()) {
+                    std::cout << Evaluator::format_latex(result) << std::endl;
+                } else if (result.is_matrix()) {
+                    std::cout << Evaluator::format_pretty_matrix(result);
+                } else {
+                    std::cout << Evaluator::format_result(result, evaluator.output_base())
+                              << std::endl;
+                }
             }
         } catch (const CalcError& e) {
             std::cout << "Error: " << e.what() << std::endl;

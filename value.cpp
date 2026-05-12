@@ -394,6 +394,96 @@ std::string Value::to_string() const {
     return "undefined";
 }
 
+std::string Value::to_latex() const {
+    if (type == ERROR) return "\\text{Error: " + error_msg + "}";
+    if (type == STRING) return "\\text{" + error_msg + "}";
+    if (type == COMPLEX) {
+        std::string r = complex.real->to_latex();
+        std::string i = complex.imag->to_latex();
+        if (complex.imag->is_zero()) return r;
+        if (complex.real->is_zero()) {
+            if (i == "1") return "i";
+            if (i == "-1") return "-i";
+            return i + "i";
+        }
+        if (i == "1") return r + " + i";
+        if (i == "-1") return r + " - i";
+        return r + " + " + i + "i";
+    }
+    if (type == VECTOR) {
+        std::string r = "\\left(";
+        for (size_t i = 0; i < vec.size(); i++) {
+            if (i > 0) r += ", ";
+            r += vec[i].to_latex();
+        }
+        r += "\\right)";
+        return r;
+    }
+    if (type == MATRIX) {
+        std::string r = "\\begin{pmatrix}";
+        for (size_t i = 0; i < mat.size(); i++) {
+            for (size_t j = 0; j < mat[i].size(); j++) {
+                if (j > 0) r += " & ";
+                r += mat[i][j].to_latex();
+            }
+            if (i + 1 < mat.size()) r += " \\\\ ";
+        }
+        r += "\\end{pmatrix}";
+        return r;
+    }
+    if (type == SURDS) {
+        if (surds.is_rational()) {
+            BigRat r = surds.to_rational();
+            if (r.denominator() == BigInt(1)) return r.numerator().to_string();
+            return "\\frac{" + r.numerator().to_string() + "}{" + r.denominator().to_string() + "}";
+        }
+        std::string result;
+        bool first = true;
+        for (auto& t : surds.terms) {
+            if (t.coeff.is_zero()) continue;
+            bool is_rat = t.radicand == BigInt(1);
+            bool is_pi = t.radicand == BigInt(-1);
+            bool is_e = t.radicand == BigInt(-2);
+            BigRat abs_coeff = t.coeff.abs();
+            bool neg = t.coeff < BigRat(0);
+            if (first) {
+                if (neg) result += "-";
+                first = false;
+            } else {
+                result += neg ? " - " : " + ";
+            }
+            if (is_rat) {
+                if (abs_coeff.denominator() == BigInt(1)) {
+                    result += abs_coeff.numerator().to_string();
+                } else {
+                    result += "\\frac{" + abs_coeff.numerator().to_string() + "}{" + abs_coeff.denominator().to_string() + "}";
+                }
+            } else {
+                BigInt p = abs_coeff.numerator().abs();
+                BigInt q = abs_coeff.denominator();
+                bool p_is_one = p == BigInt(1);
+                bool q_is_one = q == BigInt(1);
+                std::string sym;
+                if (is_pi) sym = "\\pi";
+                else if (is_e) sym = "e";
+                else sym = "\\sqrt{" + t.radicand.to_string() + "}";
+                if (p_is_one && q_is_one) {
+                    result += sym;
+                } else if (p_is_one && !q_is_one) {
+                    result += "\\frac{" + sym + "}{" + q.to_string() + "}";
+                } else if (!p_is_one && q_is_one) {
+                    result += p.to_string() + sym;
+                } else {
+                    result += "\\frac{" + p.to_string() + sym + "}{" + q.to_string() + "}";
+                }
+            }
+        }
+        return result.empty() ? "0" : result;
+    }
+    if (type == FLOAT) return float_val.to_string();
+    return "undefined";
+}
+
 Value Value::operator+(const Value& o) const {
     if (is_error()) return *this;
     if (o.is_error()) return o;

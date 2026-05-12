@@ -136,7 +136,7 @@ CCalc/
 **类型枚举**：
 
 ```cpp
-enum Type { SURDS, FLOAT, COMPLEX, VECTOR, STRING, ERROR };
+enum Type { SURDS, FLOAT, COMPLEX, VECTOR, MATRIX, STRING, ERROR };
 ```
 
 | 类型 | 用途 | 存储字段 |
@@ -145,13 +145,23 @@ enum Type { SURDS, FLOAT, COMPLEX, VECTOR, STRING, ERROR };
 | FLOAT | 浮点近似值 | `float_val: BigFloat` |
 | COMPLEX | 复数 | `complex: ComplexVal` |
 | VECTOR | 向量 | `vec: vector<Value>` |
-| STRING | 字符串（因数分解结果） | `error_msg: string` |
+| MATRIX | 矩阵 | `mat: vector<vector<Value>>` |
+| STRING | 字符串（因数分解/求导/积分表等结果） | `error_msg: string` |
 | ERROR | 错误信息 | `error_msg: string` |
+
+**MATRIX 类型**：
+
+- `mat` 字段存储 `vector<vector<Value>>`，每行一个 `vector<Value>`
+- `mat_rows()` / `mat_cols()` 返回矩阵维度
+- `make_matrix(rows)` 静态工厂方法构造矩阵
+- `is_matrix()` 判断是否为矩阵类型
 
 **类型提升规则**：
 - SURDS ⊕ FLOAT → FLOAT
 - SURDS/FLOAT ⊕ COMPLEX → COMPLEX
 - VECTOR ⊕ VECTOR → VECTOR（同维度加减、标量乘法）
+- MATRIX ⊕ MATRIX → MATRIX（同维度加减、矩阵乘法）
+- MATRIX ⊕ 标量 → MATRIX（标量乘法）
 - 任何 ⊕ ERROR → ERROR
 
 **ComplexVal**：`shared_ptr<Value> real, imag`，支持任意精度的实部和虚部。
@@ -164,9 +174,19 @@ enum Type { SURDS, FLOAT, COMPLEX, VECTOR, STRING, ERROR };
 
 ```
 NUMBER, IDENTIFIER, PLUS, MINUS, STAR, SLASH, CARET, PERCENT,
-LPAREN, RPAREN, COMMA, BANG, EQUAL, LT, GT, LE, GE, NEQ,
+LPAREN, RPAREN, LBRACKET, RBRACKET, COMMA, SEMICOLON, BANG, EQUAL, LT, GT, LE, GE, NEQ,
+COLON_EQUAL,
 END_OF_INPUT, ERROR
 ```
+
+**新增 Token 说明**：
+
+| Token | 字符 | 用途 |
+|-------|------|------|
+| LBRACKET | `[` | 矩阵字面量左括号 |
+| RBRACKET | `]` | 矩阵字面量右括号 |
+| SEMICOLON | `;` | 矩阵行分隔符 |
+| COLON_EQUAL | `:=` | 自定义函数定义 |
 
 **隐式乘法**：自动在以下相邻 Token 间插入 `*`：
 - 数字后接标识符：`2pi` → `2*pi`
@@ -198,17 +218,27 @@ END_OF_INPUT, ERROR
 **AST 节点类型**：
 
 ```
-NUMBER     — 数值字面量 (BigRat)
-CONSTANT   — 常量 (pi, e)
-VARIABLE   — 变量 (x, k, ans, VerA, VerB, VerC, VerD)
-BINOP      — 二元运算 (+, -, *, /, ^, %)
-UNARYOP    — 一元运算 (-)
-FUNCTION   — 函数调用 (sin, cos, ...)
-FACTORIAL  — 阶乘后缀 (n!)
+NUMBER      — 数值字面量 (BigRat)
+CONSTANT    — 常量 (pi, e)
+VARIABLE    — 变量 (x, k, ans, VerA, VerB, VerC, VerD)
+BINOP       — 二元运算 (+, -, *, /, ^, %)
+UNARYOP     — 一元运算 (-)
+FUNCTION    — 函数调用 (sin, cos, ...)
+FACTORIAL   — 阶乘后缀 (n!)
 VEC_LITERAL — 向量字面量 ((1,2,3))
+MAT_LITERAL — 矩阵字面量 ([1,2;3,4])
 ```
 
-**已知函数列表**：50+ 个内置函数名，用于区分函数调用和变量名乘法。
+**矩阵字面量解析**：Parser 的 `primary()` 函数检测 `[` 开头的语法，解析为 `MAT_LITERAL` AST 节点：
+
+- `[` 开始矩阵字面量
+- 逗号 `,` 分隔同行元素
+- 分号 `;` 分隔行
+- `]` 结束矩阵字面量
+- 示例：`[1,2;3,4]` → 2×2 矩阵，`[1,2,3]` → 1×3 矩阵（行向量）
+- `mat_rows` 字段存储 `vector<vector<ASTPtr>>`
+
+**已知函数列表**：60+ 个内置函数名，用于区分函数调用和变量名乘法。
 
 ## 5. 求值器设计
 
@@ -261,9 +291,106 @@ f'(x) ≈ [-f(x-2h) + 8f(x-h) - 8f(x+h) + f(x+2h)] / (12h)
 ```
 - `h = 10^(-precision/3 - 5)`
 
-**求和/连乘** — 逐项求值：
-- `sum(expr, var, from, to)` — 从 from 到 to 逐整数求值并累加
-- `prod(expr, var, from, to)` — 从 from 到 to 逐整数求值并累乘
+**符号求导** — `diff(expr, var)`：
+
+通过 AST 变换实现符号求导，`sdiff(node, var)` 递归遍历 AST 并返回导数的 AST：
+
+| 节点类型 | 求导规则 | 示例 |
+|----------|---------|------|
+| NUMBER | d/dx(c) = 0 | `sdiff(3, x)` → `0` |
+| CONSTANT | d/dx(π) = 0 | `sdiff(pi, x)` → `0` |
+| VARIABLE | d/dx(x) = 1, d/dx(y) = 0 | `sdiff(x, x)` → `1` |
+| BINOP `+` | (f+g)' = f'+g' | `sdiff(x+1, x)` → `1+0` |
+| BINOP `-` | (f-g)' = f'-g' | |
+| BINOP `*` | (fg)' = f'g + fg'（乘积法则） | `sdiff(x*sin(x), x)` → `1*sin(x)+x*cos(x)` |
+| BINOP `/` | (f/g)' = (f'g - fg')/g²（商法则） | |
+| BINOP `^` | 三种情况（见下表） | |
+| UNARYOP `-` | (-f)' = -f' | |
+| FUNCTION sin | (sin u)' = u'·cos(u) | |
+| FUNCTION cos | (cos u)' = -u'·sin(u) | |
+| FUNCTION tan | (tan u)' = u'·sec²(u) | |
+| FUNCTION ln | (ln u)' = u'/u | |
+| FUNCTION exp | (exp u)' = u'·exp(u) | |
+| FUNCTION sqrt | (√u)' = u'/(2√u) | |
+
+**幂运算求导的三种情况**（`f^g` 对 `x` 求导）：
+
+| 情况 | 条件 | 公式 |
+|------|------|------|
+| 常数幂 | f 含 x，g 不含 x | f'·g·f^(g-1) |
+| 常数底 | f 不含 x，g 含 x | f^g · g'·ln(f) |
+| 一般幂 | f 和 g 都含 x | f^g · (g'·ln(f) + g·f'/f)（对数微分法） |
+
+**实现细节**：
+- 通过 `ast_to_string(node)` 将导数 AST 转为可读字符串输出
+- `sdiff` 不做化简，保留完整的符号形式
+- `diff(expr, var, point)` 三参数形式仍使用数值微分（五点差分）
+
+**泰勒展开** — `taylor(expr, var, point, n)`：
+
+计算 f(x) 在 x=a 处的 n 阶泰勒展开：
+
+```
+f(x) ≈ Σ_{k=0}^{n} f^(k)(a)/k! · (x-a)^k
+```
+
+**实现方式**：
+1. `current_deriv` 初始为原始表达式 AST
+2. 每次迭代：
+   - 用 `substitute(current_deriv, var, point)` 求值 f^(k)(a)
+   - 系数 = f^(k)(a) / k!
+   - 用 `sdiff(current_deriv, var)` 计算下一阶导数
+   - `factorial` 逐次乘以 (k+1) 维护 k!
+3. 有理系数保持精确（BigRat 运算），非有理系数回退到 BigFloat
+4. 输出格式：`c₀ + c₁*x + c₂*x^2 + ... + cₙ*x^n`
+
+**极限计算** — `limit(expr, var, val)`：
+
+数值逼近法，在目标点两侧逐渐缩小距离：
+
+1. ε 序列：`{1e-4, 1e-6, 1e-8, 1e-10, 1e-12}`
+2. 对每个 ε，计算 `f(val+ε)` 和 `f(val-ε)` 的平均值
+3. 如果相邻两次结果之差 < 1e-10，返回当前值
+4. 否则继续缩小 ε
+5. 若所有 ε 用完仍未收敛，返回最后一次计算值
+
+**积分表** — `inttable(expr)`：
+
+基于 AST 模式匹配查找常见函数的不定积分：
+
+| 表达式模式 | 不定积分 |
+|-----------|---------|
+| x | x²/2 |
+| x^n (n≠-1) | x^(n+1)/(n+1) |
+| x^(-1) | ln\|x\| |
+| sin(x) | -cos(x) |
+| cos(x) | sin(x) |
+| exp(x) | exp(x) |
+| ln(x) | x·ln(x) - x |
+| 1/x | ln\|x\| |
+| f(x) + g(x) | ∫f + ∫g（逐项查表） |
+| f(x) - g(x) | ∫f - ∫g（逐项查表） |
+| -f(x) | -(∫f) |
+
+**实现方式**：
+- 递归遍历 AST，对每个子表达式尝试匹配已知模式
+- `find_var` lambda 自动检测表达式中的变量名
+- `is_const` lambda 判断子表达式是否不含变量
+- 无法匹配时返回 "No known antiderivative for ..."
+
+**递推数列** — `recur(expr, var, init, n)`：
+
+计算递推关系 a_{n} = f(a_{n-1}) 的第 n 项：
+
+1. `current = init_val`
+2. 循环 i = 1 到 n：
+   - `current = substitute(expr, var, current)`
+3. 返回 `current`
+
+**示例**：
+- `recur(a+1, a, 1, 5)` → 6（等差：1,2,3,4,5,6）
+- `recur(a*2, a, 1, 10)` → 1024（等比：1,2,4,...,1024）
+- `recur(a^2, a, 2, 3)` → 256（a₁=2, a₂=4, a₃=16, a₄=256）
 
 ### 5.3 复数运算
 
@@ -309,12 +436,25 @@ f'(x) ≈ [-f(x-2h) + 8f(x-h) - 8f(x+h) + f(x+2h)] / (12h)
 - 赋值语法 `C=3` 优先解释为变量赋值
 - 表达式中 `C(10,3)` 优先解释为函数调用，单独 `C` 解释为变量
 
-### 5.6 进制输出
+### 5.6 进制系统
+
+**输入进制**：Lexer 支持以下前缀将非十进制输入转为十进制数值：
+- `0b` / `0B`：二进制，如 `0b1010` → 10
+- `0o` / `0O`：八进制，如 `0o77` → 63
+- `0x` / `0X`：十六进制，如 `0xFF` → 255
+
+前缀后的字符必须属于对应进制的合法数字集，否则解析在该字符处停止。
+
+**直接进制运算**：不同进制的输入可以在同一表达式中混合使用，运算在十进制下进行：
+- `0b101 + 0b110` → `11`（5 + 6 = 11）
+- `0xFF - 0o10` → `247`（255 - 8 = 247）
+- `0b100 * 0xA` → `40`（4 * 10 = 40）
 
 **输出进制**：通过 `base N` 命令设置（2~36），默认为 10。
 
 **实现方式**：
 - `BigInt::to_base_string(base)` 将整数转为指定进制字符串
+- `BigInt::from_base_string(s, base)` 从指定进制字符串构造整数
 - 字母 A~Z 表示 10~35
 - 仅对整数结果应用进制转换，分数和根式仍以十进制显示
 
@@ -441,6 +581,120 @@ depth = 0
 
 **错误处理**：任一子表达式出错时，输出错误信息并继续求值后续子表达式。
 
+**矩阵字面量中的逗号处理**：`split_top_level` 增加了 `bracket_depth` 计数，方括号内的逗号不拆分：
+
+```
+depth = 0, bracket_depth = 0
+遍历每个字符：
+  遇到 '(' → depth++
+  遇到 ')' → depth--
+  遇到 '[' → bracket_depth++
+  遇到 ']' → bracket_depth--
+  遇到 ',' 且 depth == 0 且 bracket_depth == 0 → 在此处拆分
+```
+
+### 5.10 矩阵运算
+
+**矩阵字面量语法**：`[1,2;3,4]`，分号分隔行，逗号分隔列。
+
+**矩阵算术运算**（在 `Value` 运算符重载中实现）：
+
+| 运算 | 语法 | 实现 |
+|------|------|------|
+| 加法 | `A + B` | 逐元素相加，维度必须相同 |
+| 减法 | `A - B` | 逐元素相减，维度必须相同 |
+| 矩阵乘法 | `A * B` | 标准矩阵乘法，A 的列数 = B 的行数 |
+| 标量乘法 | `3 * A` 或 `A * 3` | 标量与每个元素相乘 |
+| 取负 | `-A` | 每个元素取负 |
+
+**矩阵函数**：
+
+| 函数 | 签名 | 算法 | 约束 |
+|------|------|------|------|
+| `det(m)` | 方阵 | 递归余子式展开（1×1直接返回，2×2/3×3硬编码，n≥4递归） | 方阵 |
+| `inv(m)` | 方阵 | 伴随矩阵法：adj(M)/det(M)，先计算所有余子式再转置 | 方阵，det≠0 |
+| `eigen(m)` | 方阵 | 2×2/3×3 特征多项式 + 数值求根 | ≤4×4 |
+| `trace(m)` | 方阵 | 对角线元素之和 | 方阵 |
+| `transpose(m)` | 任意 | 行列互换 | — |
+| `identity(n)` | 整数 | 对角线1，其余0 | 1≤n≤100 |
+
+**行列式计算**：
+
+- 1×1：直接返回唯一元素
+- 2×2：`ad - bc`
+- 3×3：Sarrus 法则（硬编码展开）
+- n×4+：按第一行余子式展开，递归调用 `eval_det`
+
+**逆矩阵计算**：
+
+1. 计算 det(M)，若为 0 则报错 "Matrix is singular"
+2. 对每个元素 (i,j) 计算余子式（删去第 i 行第 j 列的子矩阵的行列式）
+3. 乘以符号 (-1)^(i+j) 得到代数余子式
+4. 转置得到伴随矩阵 adj(M)
+5. 每个元素除以 det(M)
+
+**特征值计算**：
+
+- 2×2：特征多项式 λ² - tr(A)λ + det(A) = 0，用二次方程求根
+- 3×3：特征多项式 λ³ - tr(A)λ² + ((tr(A)² - tr(A²))/2)λ - det(A) = 0，用 Cardano 公式
+- 使用 `double` 精度计算，结果格式化输出
+
+### 5.11 统计函数
+
+| 函数 | 签名 | 算法 |
+|------|------|------|
+| `mean(a,b,...)` | 可变参数 | Σxᵢ/n，支持向量参数展开 |
+| `variance(a,b,...)` | 可变参数 | Σ(xᵢ-x̄)²/(n-1)，样本方差（Bessel 校正） |
+| `stddev(a,b,...)` | 可变参数 | √variance，调用 `eval_sqrt` |
+| `median(a,b,...)` | 可变参数 | 排序后取中位数，偶数个取平均 |
+
+**实现细节**：
+- `mean` 使用 Value 精确算术（BigRat），结果可能为精确有理数
+- `variance` 和 `median` 使用 `double` 精度计算（通过 `val_to_double` 转换）
+- `stddev` 对 variance 结果调用 `eval_sqrt`，可能返回精确根式
+- 向量参数自动展开：`mean((1,2,3))` 等价于 `mean(1,2,3)`
+
+### 5.12 自定义函数
+
+**定义语法**：`f(x) := expr`，`g(x,y) := expr`
+
+**解析过程**（`parse_custom_function`）：
+1. 检测 `:=`（COLON_EQUAL token），将输入分为左部和右部
+2. 左部解析：提取函数名和参数列表
+3. 右部解析：通过 Lexer + Parser 构造 AST
+4. 存入 `Evaluator::user_functions_` 映射表
+
+**存储结构**：
+```cpp
+std::map<std::string, std::pair<std::vector<std::string>, ASTPtr>> user_functions_;
+// 键：函数名，值：(参数名列表, 函数体AST)
+```
+
+**调用过程**（`eval_function`）：
+1. 检查 `has_user_function(name)`
+2. 验证参数个数匹配
+3. 对函数体 AST 进行参数替换：递归遍历 AST，将每个参数变量节点替换为对应实参的数值节点
+4. 对替换后的 AST 调用 `eval_node` 求值
+
+**限制**：
+- 函数名不能与内置函数名冲突
+- 参数替换仅替换 VARIABLE 节点，不替换函数名中的变量
+- 递归调用自定义函数不支持（会导致无限循环）
+
+### 5.13 表达式化简
+
+**函数**：`simplify(expr)` — 求值并显示化简结果
+
+**实现方式**：
+1. 对表达式 AST 求值得到数值结果
+2. 对于除法表达式，分别求值分子和分母，显示 `分子/分母 = 结果`
+3. 对于其他表达式，显示 `原式 = 结果`
+4. 使用 `ast_to_string(node)` 将 AST 转为可读字符串
+
+**示例**：
+- `simplify(6/3)` → `6/3 = 2`
+- `simplify(2+3)` → `2+3 = 5`
+
 ### 5.9 方程求解
 
 **函数**：`solve(a, b, ...)` — 传入多项式各项系数（从最高次到常数项），返回所有根的向量。
@@ -502,6 +756,8 @@ depth = 0
 
 ## 6. 输出格式化
 
+### 6.1 常规格式化
+
 `format_result()` 根据值类型选择最优显示：
 
 | 值类型 | 显示格式 | 示例 |
@@ -514,8 +770,56 @@ depth = 0
 | 纯浮点 | 小数 | `3.14159...` |
 | 复数 | a + bi | `3 + 4*i` |
 | 向量 | (分量, 分量, ...) | `(1, 2, 3)` |
+| 矩阵 | 美化方框输出（见 6.3） | |
 | 错误 | Error: 信息 | `Error: Division by zero` |
 | 字符串 | 原始文本 | `2^3 * 3^2 * 5` |
+
+### 6.2 LaTeX 格式化
+
+通过 `latex` 命令切换 LaTeX 输出模式，`format_latex()` 将 Value 转为 LaTeX 代码：
+
+| 值类型 | LaTeX 格式 | 示例 |
+|--------|-----------|------|
+| 有理数 | `\frac{p}{q}` | `1/2` → `\frac{1}{2}` |
+| 整数 | 原样 | `3` → `3` |
+| 根式 | `\sqrt{n}` | `sqrt(2)` → `\sqrt{2}` |
+| π | `\pi` | `pi/3` → `\frac{\pi}{3}` |
+| e | `e` | `3*e` → `3e` |
+| 根式系数 | `\frac{p\sqrt{n}}{q}` | `sqrt(2)/2` → `\frac{\sqrt{2}}{2}` |
+| 复数 | `a + bi` | `3+i` → `3 + i` |
+| 向量 | `\left(...\right)` | `(1,2)` → `\left(1, 2\right)` |
+| 矩阵 | `\begin{pmatrix}...\end{pmatrix}` | `[1,2;3,4]` → `\begin{pmatrix}1 & 2 \\ 3 & 4\end{pmatrix}` |
+
+**实现方式**：
+- `Value::to_latex()` 和 `Evaluator::format_latex()` 协同工作
+- 对 SurdsExpr 的每个 term 分别格式化，处理正负号和系数
+- 矩阵使用 `&` 分隔列，`\\` 分隔行
+- REPL 中通过 `evaluator.latex_mode()` 标志控制输出路径
+
+### 6.3 矩阵美化输出
+
+`format_pretty_matrix()` 使用 Unicode 方框绘制字符对齐输出矩阵：
+
+```
+┌─────┬─────┐
+│  1  │  2  │
+├─────┼─────┤
+│  3  │  4  │
+└─────┴─────┘
+```
+
+**实现方式**：
+1. 计算每列最大宽度 `col_widths[]`
+2. 每个单元格居中对齐（`left_pad + content + right_pad`）
+3. 使用 Unicode 方框绘制字符：
+   - `┌ ┐ └ ┘` 四角
+   - `├ ┤` 左右 T 形
+   - `─` 水平线
+   - `│` 竖线
+   - `┬ ┴` 上下 T 形
+4. 行间用 `├─┼─┤` 分隔，首行上方 `┌─┬─┐`，末行下方 `└─┴─┘`
+
+**触发条件**：当 `result.is_matrix()` 时自动使用美化输出，而非 `format_result`。
 
 ## 7. 性能特征
 
@@ -531,8 +835,105 @@ depth = 0
 - 数值微分为近似值，精度约 60~70 位有效数字
 - 定积分为近似值（Simpson 法则），精度取决于区间数
 - `e^2` 等超越数幂次无法给出精确符号表示
+- 符号求导不做化简，输出可能包含冗余项（如 `1*0`）
+- 积分表仅支持基本的模式匹配，不支持换元积分和分部积分
+- 极限计算为数值逼近，对振荡函数可能不准确
+- 自定义函数不支持递归调用
+- 特征值计算使用 double 精度，大矩阵可能有精度损失
 
-## 8. 编译与构建
+## 8. REPL 交互界面
+
+### 8.1 自定义输入行（readline_custom）
+
+**设计动机**：Windows 标准输入不支持行内编辑、历史导航和语法高亮，因此使用 `_getch()` 实现自定义输入行。
+
+**实现方式**：
+- 使用 `_getch()` 逐字符读取，不经过标准输入缓冲
+- 维护 `line` 字符串和 `cursor` 位置
+- 每次修改后重绘整行（`\r` + prompt + 高亮内容 + 清除残余 + 定位光标）
+
+**按键处理**：
+
+| 按键 | 扫描码 | 行为 |
+|------|--------|------|
+| Enter | `\r` / `\n` | 提交输入，加入历史 |
+| Backspace | `\b` / `127` | 删除光标前字符 |
+| ↑ | `0x00/0xE0` + `0x48` | 历史上翻 |
+| ↓ | `0x00/0xE0` + `0x50` | 历史下翻 |
+| ← | `0x00/0xE0` + `0x4B` | 光标左移 |
+| → | `0x00/0xE0` + `0x4D` | 光标右移 |
+| Tab | `\t` | 函数名补全 |
+| 可打印字符 | `32~126` | 插入到光标位置 |
+
+**Windows 控制台特殊处理**：
+- `ENABLE_VIRTUAL_TERMINAL_PROCESSING` 标志启用 ANSI 转义序列支持
+- `SetConsoleOutputCP(CP_UTF8)` / `SetConsoleCP(CP_UTF8)` 设置 UTF-8 编码
+
+### 8.2 历史记录导航
+
+**存储**：`std::vector<std::string> history`，`int history_idx` 指向当前位置。
+
+**行为**：
+- 每次提交非空输入时，检查是否已存在于历史中，避免重复
+- `history_idx` 初始指向 `history.size()`（最新位置之后）
+- ↑ 键：`history_idx--`，显示 `history[history_idx]`
+- ↓ 键：`history_idx++`，若超出范围则清空输入
+- 历史浏览时修改输入不会覆盖原始历史记录
+
+### 8.3 Tab 补全
+
+**触发**：按下 Tab 键时，提取光标前的当前单词，在 `all_function_names` 中搜索匹配项。
+
+**算法**：
+1. 从 `cursor-1` 向左扫描，收集连续的字母数字字符作为 `word`
+2. 在 `all_function_names` 中查找前缀匹配 `word` 的所有函数名
+3. 若唯一匹配：直接补全为 `funcname(`
+4. 若多个匹配：补全到最长公共前缀
+5. 无匹配：不做任何操作
+
+**示例**：
+- 输入 `si` + Tab → `sin(`
+- 输入 `co` + Tab → `cos(`（公共前缀为 `cos`，因为 `comb` 也匹配但公共前缀为 `co`）
+- 输入 `std` + Tab → `stddev(`
+
+### 8.4 语法高亮
+
+**实现**：`syntax_highlight()` 函数对输入字符串进行实时着色。
+
+**颜色方案**（ANSI 转义码）：
+
+| 元素 | 颜色 | ANSI 码 | 示例 |
+|------|------|---------|------|
+| 数字 | 灰色 | `\033[90m` | `3.14`, `0xFF` |
+| 函数名 | 绿色 | `\033[32m` | `sin`, `cos`, `det` |
+| 运算符 | 黄色 | `\033[33m` | `+`, `-`, `*`, `/`, `^`, `%` |
+| 常量 | 灰色 | `\033[90m` | `pi`, `e` |
+| 其他 | 默认色 | — | 变量名 `x`, 括号等 |
+
+**分词规则**：
+- 数字：连续的数字和小数点，包括进制前缀（`0b`, `0o`, `0x`）
+- 标识符：连续的字母、数字和下划线
+- 运算符：`+`, `-`, `*`, `/`, `^`, `%`
+- 其他字符：不着色
+
+### 8.5 批量计算模式
+
+**语法**：`ccalc -f file.txt`
+
+**实现方式**：
+1. 检测 `argc >= 3 && argv[1] == "-f"`
+2. 打开文件，逐行读取
+3. 空行和 `#` 开头的行跳过（注释）
+4. 每行通过 `split_top_level` 拆分，逐表达式求值
+5. 支持变量赋值、自定义函数定义
+6. LaTeX 模式下输出 LaTeX 格式
+7. 图形命令在批量模式下跳过
+
+**限制**：
+- 使用 `std::getline` 读取（非 `_getch`），因此不支持交互式功能
+- 图形命令被跳过（无窗口环境）
+
+## 9. 编译与构建
 
 **依赖**：仅 C++17 标准库，无外部依赖
 
@@ -550,9 +951,9 @@ make clean  # 清理
 - `SetConsoleOutputCP(CP_UTF8)` / `SetConsoleCP(CP_UTF8)` 设置控制台 UTF-8 编码
 - `std::flush` 确保提示符即时显示
 
-## 9. 函数图像绘制
+## 10. 函数图像绘制
 
-### 9.1 概述
+### 10.1 概述
 
 CCalc 提供独立的函数图像绘制窗口 `ccalc_graph.exe`，基于 Dear ImGui + DirectX 11 实现。支持四种绘图类型：
 
@@ -563,7 +964,7 @@ CCalc 提供独立的函数图像绘制窗口 `ccalc_graph.exe`，基于 Dear Im
 | 参数方程 | `graph_param(t, cos(t), sin(t))` | `ccalc_graph -p "cos(t)" "sin(t)"` | 圆 |
 | 极坐标 r=f(θ) | `graph_polar(1+cos(theta))` | `ccalc_graph -l "1+cos(theta)"` | 心形线 |
 
-### 9.2 架构设计
+### 10.2 架构设计
 
 ```
 graph.cpp（独立可执行文件）
@@ -590,7 +991,7 @@ graph.cpp（独立可执行文件）
     └── EvalVars { x, y, t, theta } 支持四种变量
 ```
 
-### 9.3 快速求值器（fast_eval）
+### 10.3 快速求值器（fast_eval）
 
 **设计动机**：CCalc 的核心求值器使用高精度 BigFloat 运算，每次求值涉及字符串构造、高精度计算和格式转换，对实时绘图（每帧需 ~1000 次求值）来说太慢。
 
@@ -612,7 +1013,7 @@ graph.cpp（独立可执行文件）
 
 **不支持的函数**：`factor`, `gcd`, `lcm`, `P`, `C`, `convert`, `solve` 等返回 NAN（不适用于绘图场景）。
 
-### 9.4 AST 缓存机制
+### 10.4 AST 缓存机制
 
 **问题**：如果每次采样都重新解析表达式字符串（Lexer + Parser），每帧需解析数千次，导致窗口卡死。
 
@@ -623,9 +1024,9 @@ graph.cpp（独立可执行文件）
 
 **缓存失效**：当用户修改输入框中的表达式时，`ensure_ast()` 检测到 `expr != cached_expr_str`，触发重新解析。
 
-### 9.5 绘图算法
+### 10.5 绘图算法
 
-#### 9.5.1 显式函数 y=f(x)
+#### 10.5.1 显式函数 y=f(x)
 
 **采样策略**：
 - 采样点数 = 画布像素宽度（通常 700~1500 点）
@@ -636,7 +1037,7 @@ graph.cpp（独立可执行文件）
 - 当 `|y - prev_y| > (y_max - y_min) * 10` 时，认为函数不连续（如 `tan(x)` 的渐近线）
 - 不连续处断开折线，避免竖直连线
 
-#### 9.5.2 隐函数 f(x,y)=0（Marching Squares）
+#### 10.5.2 隐函数 f(x,y)=0（Marching Squares）
 
 **算法**：Marching Squares 等值线提取
 1. 在视图范围内建立 N×M 网格（约 100~300 点/轴）
@@ -649,7 +1050,7 @@ graph.cpp（独立可执行文件）
 
 **优势**：能绘制任意隐函数曲线，如圆、椭圆、双曲线等
 
-#### 9.5.3 参数方程 (x(t), y(t))
+#### 10.5.3 参数方程 (x(t), y(t))
 
 **采样策略**：
 - 参数 t 在 [t_min, t_max] 范围内均匀采样 2000 个点
@@ -657,7 +1058,7 @@ graph.cpp（独立可执行文件）
 - 每个采样点计算 x(t) 和 y(t)，直接映射到屏幕坐标
 - 跳跃检测：相邻屏幕点距离超过 800 像素时断开折线
 
-#### 9.5.4 极坐标 r=f(θ)
+#### 10.5.4 极坐标 r=f(θ)
 
 **采样策略**：
 - 参数 θ 在 [t_min, t_max] 范围内均匀采样 2000 个点
@@ -677,7 +1078,7 @@ rough = range / 10
 选择 1, 2, 5, 10 中最接近 rough 的数量级
 ```
 
-### 9.6 交互功能
+### 10.6 交互功能
 
 | 操作 | 实现 |
 |------|------|
@@ -686,7 +1087,7 @@ rough = range / 10
 | 鼠标悬停 | 显示十字准线 + 坐标值 + 各显式函数在该 x 处的值和标记点 |
 | Settings 按钮 | 左上角浮动 overlay 按钮，控制设置面板的显隐 |
 
-### 9.7 REPL 集成
+### 10.7 REPL 集成
 
 **语法**：
 - `graph(expr)` — 显式函数 y=expr
@@ -705,7 +1106,7 @@ rough = range / 10
 - `ccalc_graph.exe` — 无参数时默认绘制 sin(x)
 - 窗口标题显示 `y = expr`
 
-### 9.8 构建系统
+### 10.8 构建系统
 
 **Makefile 新增目标**：
 - `ccalc_graph.exe`：链接 `graph.o` + 计算器核心对象 + ImGui 对象 + DirectX 库

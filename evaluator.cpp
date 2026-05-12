@@ -311,6 +311,325 @@ Value Evaluator::eval_simplify(ASTPtr node) {
     return Value::make_string(ast_to_string(node) + " = " + result.to_string());
 }
 
+ASTPtr Evaluator::sdiff(ASTPtr node, const std::string& var) {
+    if (!node) return ASTNode::make_num(BigRat(0));
+    switch (node->type) {
+    case ASTNode::NUMBER:
+        return ASTNode::make_num(BigRat(0));
+    case ASTNode::CONSTANT:
+        return ASTNode::make_num(BigRat(0));
+    case ASTNode::VARIABLE:
+        if (node->name == var) return ASTNode::make_num(BigRat(1));
+        return ASTNode::make_num(BigRat(0));
+    case ASTNode::BINOP: {
+        auto dl = sdiff(node->left, var);
+        auto dr = sdiff(node->right, var);
+        if (node->op == '+') return ASTNode::make_binop('+', dl, dr);
+        if (node->op == '-') return ASTNode::make_binop('-', dl, dr);
+        if (node->op == '*') {
+            auto term1 = ASTNode::make_binop('*', node->left, dr);
+            auto term2 = ASTNode::make_binop('*', dl, node->right);
+            return ASTNode::make_binop('+', term1, term2);
+        }
+        if (node->op == '/') {
+            auto num = ASTNode::make_binop('-',
+                ASTNode::make_binop('*', dl, node->right),
+                ASTNode::make_binop('*', node->left, dr));
+            auto den = ASTNode::make_binop('*', node->right, node->right);
+            return ASTNode::make_binop('/', num, den);
+        }
+        if (node->op == '^') {
+            bool left_has_var = false, right_has_var = false;
+            std::string ls = ast_to_string(node->left), rs = ast_to_string(node->right);
+            if (ls.find(var) != std::string::npos) left_has_var = true;
+            if (rs.find(var) != std::string::npos) right_has_var = true;
+            if (!left_has_var && !right_has_var) return ASTNode::make_num(BigRat(0));
+            if (left_has_var && !right_has_var) {
+                auto dleft = sdiff(node->left, var);
+                auto exp_part = ASTNode::make_binop('^', node->left,
+                    ASTNode::make_binop('-', node->right, ASTNode::make_num(BigRat(1))));
+                auto coeff = ASTNode::make_binop('*', node->right, exp_part);
+                return ASTNode::make_binop('*', dleft, coeff);
+            }
+            if (!left_has_var && right_has_var) {
+                auto ln_base = ASTNode::make_func("ln", {node->left});
+                auto dright = sdiff(node->right, var);
+                return ASTNode::make_binop('*', node,
+                    ASTNode::make_binop('*', dright, ln_base));
+            }
+            auto ln_base = ASTNode::make_func("ln", {node->left});
+            auto dright = sdiff(node->right, var);
+            return ASTNode::make_binop('*', node,
+                ASTNode::make_binop('+',
+                    ASTNode::make_binop('*', dright, ln_base),
+                    ASTNode::make_binop('*', node->right,
+                        ASTNode::make_binop('/', dl, node->left))));
+        }
+        return ASTNode::make_num(BigRat(0));
+    }
+    case ASTNode::UNARYOP:
+        if (node->op == '-') {
+            return ASTNode::make_unaryop('-', sdiff(node->left, var));
+        }
+        return sdiff(node->left, var);
+    case ASTNode::FUNCTION: {
+        if (node->args.empty()) return ASTNode::make_num(BigRat(0));
+        auto du = sdiff(node->args[0], var);
+        if (node->name == "sin") {
+            return ASTNode::make_binop('*', du,
+                ASTNode::make_func("cos", {node->args[0]}));
+        }
+        if (node->name == "cos") {
+            return ASTNode::make_binop('*', du,
+                ASTNode::make_unaryop('-',
+                    ASTNode::make_func("sin", {node->args[0]})));
+        }
+        if (node->name == "tan") {
+            auto sec2 = ASTNode::make_binop('^',
+                ASTNode::make_func("cos", {node->args[0]}),
+                ASTNode::make_num(BigRat(-2)));
+            return ASTNode::make_binop('*', du, sec2);
+        }
+        if (node->name == "ln") {
+            return ASTNode::make_binop('/', du, node->args[0]);
+        }
+        if (node->name == "exp") {
+            return ASTNode::make_binop('*', du,
+                ASTNode::make_func("exp", {node->args[0]}));
+        }
+        if (node->name == "sqrt") {
+            auto half = ASTNode::make_num(BigRat(1, 2));
+            return ASTNode::make_binop('*', du,
+                ASTNode::make_binop('/', half,
+                    ASTNode::make_func("sqrt", {node->args[0]})));
+        }
+        return ASTNode::make_num(BigRat(0));
+    }
+    case ASTNode::FACTORIAL:
+        return ASTNode::make_num(BigRat(0));
+    default:
+        return ASTNode::make_num(BigRat(0));
+    }
+}
+
+Value Evaluator::eval_taylor(ASTPtr node) {
+    if (node->args.size() != 4)
+        return Value::make_error("taylor(expr, var, point, n) requires 4 arguments");
+    auto expr = node->args[0];
+    std::string var;
+    if (node->args[1]->type == ASTNode::VARIABLE) var = node->args[1]->name;
+    else return Value::make_error("Second argument of taylor must be a variable");
+    Value pt_val = eval_node(node->args[2]);
+    if (pt_val.is_error()) return pt_val;
+    Value n_val = eval_node(node->args[3]);
+    if (n_val.is_error()) return n_val;
+    if (!n_val.is_rational()) return Value::make_error("n must be an integer");
+    BigRat nr = n_val.to_rational();
+    if (nr.denominator() != BigInt(1) || nr < BigRat(0))
+        return Value::make_error("n must be a non-negative integer");
+    int64_t n = nr.numerator().to_int64();
+
+    ASTPtr current_deriv = expr;
+    std::string result;
+    bool first = true;
+    BigRat factorial(1);
+    for (int64_t k = 0; k <= n; k++) {
+        Value f_val = substitute(current_deriv, var, pt_val);
+        if (f_val.is_error()) return f_val;
+        if (!f_val.is_zero()) {
+            BigRat coeff_r;
+            if (f_val.is_rational()) {
+                coeff_r = f_val.to_rational() / factorial;
+            } else {
+                BigFloat fv = f_val.to_float() / BigFloat(factorial);
+                if (!first) result += " + ";
+                first = false;
+                if (k == 0) {
+                    result += fv.to_string();
+                } else if (k == 1) {
+                    result += fv.to_string() + "*" + var;
+                } else {
+                    result += fv.to_string() + "*" + var + "^" + std::to_string(k);
+                }
+                current_deriv = sdiff(current_deriv, var);
+                factorial = factorial * BigRat(k + 1);
+                continue;
+            }
+            if (coeff_r.is_zero()) {
+                current_deriv = sdiff(current_deriv, var);
+                factorial = factorial * BigRat(k + 1);
+                continue;
+            }
+            if (!first) result += " + ";
+            first = false;
+            if (k == 0) {
+                result += coeff_r.to_string();
+            } else if (k == 1) {
+                result += coeff_r.to_string() + "*" + var;
+            } else {
+                result += coeff_r.to_string() + "*" + var + "^" + std::to_string(k);
+            }
+        }
+        current_deriv = sdiff(current_deriv, var);
+        factorial = factorial * BigRat(k + 1);
+    }
+    if (result.empty()) result = "0";
+    return Value::make_string(result);
+}
+
+Value Evaluator::eval_limit(ASTPtr node) {
+    if (node->args.size() != 3)
+        return Value::make_error("limit(expr, var, val) requires 3 arguments");
+    auto expr = node->args[0];
+    std::string var;
+    if (node->args[1]->type == ASTNode::VARIABLE) var = node->args[1]->name;
+    else return Value::make_error("Second argument of limit must be a variable");
+    Value val = eval_node(node->args[2]);
+    if (val.is_error()) return val;
+    BigFloat x0 = val.to_float();
+    double epsilons[] = {1e-4, 1e-6, 1e-8, 1e-10, 1e-12};
+    BigFloat prev = BigFloat(0);
+    bool prev_set = false;
+    for (auto eps : epsilons) {
+        BigFloat ep(eps);
+        Value f_plus = substitute(expr, var, Value(x0 + ep));
+        Value f_minus = substitute(expr, var, Value(x0 - ep));
+        if (f_plus.is_error() && f_minus.is_error())
+            return Value::make_error("limit: cannot evaluate near point");
+        BigFloat avg(0);
+        int count = 0;
+        if (!f_plus.is_error()) { avg = avg + f_plus.to_float(); count++; }
+        if (!f_minus.is_error()) { avg = avg + f_minus.to_float(); count++; }
+        if (count > 0) avg = avg / BigFloat(count);
+        if (prev_set) {
+            BigFloat diff = avg - prev;
+            if (diff < BigFloat(0)) diff = -diff;
+            if (diff < BigFloat(1e-10)) return Value(avg);
+        }
+        prev = avg;
+        prev_set = true;
+    }
+    return Value(prev);
+}
+
+Value Evaluator::eval_inttable(ASTPtr node) {
+    if (node->args.size() != 1)
+        return Value::make_error("inttable(expr) requires 1 argument");
+    auto expr = node->args[0];
+    std::string var = "x";
+
+    std::function<bool(ASTPtr, std::string&)> find_var =
+        [&find_var](ASTPtr n, std::string& v) -> bool {
+        if (!n) return false;
+        if (n->type == ASTNode::VARIABLE) { v = n->name; return true; }
+        if (find_var(n->left, v)) return true;
+        if (find_var(n->right, v)) return true;
+        for (auto& a : n->args) if (find_var(a, v)) return true;
+        for (auto& r : n->mat_rows) for (auto& a : r) if (find_var(a, v)) return true;
+        return false;
+    };
+    find_var(expr, var);
+
+    auto is_var = [&var](ASTPtr n) -> bool {
+        return n->type == ASTNode::VARIABLE && n->name == var;
+    };
+    std::function<bool(ASTPtr)> is_const =
+        [&var, &is_const](ASTPtr n) -> bool {
+        if (!n) return true;
+        if (n->type == ASTNode::VARIABLE) return n->name != var;
+        if (n->type == ASTNode::NUMBER || n->type == ASTNode::CONSTANT) return true;
+        if (n->type == ASTNode::UNARYOP) return is_const(n->left);
+        if (n->type == ASTNode::BINOP) return is_const(n->left) && is_const(n->right);
+        for (auto& a : n->args) if (!is_const(a)) return false;
+        return true;
+    };
+
+    if (expr->type == ASTNode::VARIABLE && expr->name == var) {
+        return Value::make_string(var + "^2/2");
+    }
+    if (expr->type == ASTNode::BINOP && expr->op == '^') {
+        if (is_var(expr->left) && is_const(expr->right)) {
+            if (expr->right->type == ASTNode::NUMBER) {
+                BigRat n = expr->right->number;
+                if (n == BigRat(-1)) return Value::make_string("ln|" + var + "|");
+                BigRat np1 = n + BigRat(1);
+                return Value::make_string(var + "^" + np1.to_string() + "/" + np1.to_string());
+            }
+        }
+    }
+    if (expr->type == ASTNode::FUNCTION) {
+        if (expr->name == "sin" && expr->args.size() == 1 && is_var(expr->args[0])) {
+            return Value::make_string("-cos(" + var + ")");
+        }
+        if (expr->name == "cos" && expr->args.size() == 1 && is_var(expr->args[0])) {
+            return Value::make_string("sin(" + var + ")");
+        }
+        if (expr->name == "exp" && expr->args.size() == 1 && is_var(expr->args[0])) {
+            return Value::make_string("exp(" + var + ")");
+        }
+        if ((expr->name == "ln" || expr->name == "log") && expr->args.size() == 1 && is_var(expr->args[0])) {
+            return Value::make_string(var + "*ln(" + var + ") - " + var);
+        }
+    }
+    if (expr->type == ASTNode::BINOP && expr->op == '/') {
+        if (is_var(expr->left) && is_const(expr->right)) {
+            if (expr->left->type == ASTNode::VARIABLE && expr->left->name == var) {
+                return Value::make_string(var + "^2/2/" + ast_to_string(expr->right));
+            }
+        }
+        if (is_const(expr->left) && is_var(expr->right)) {
+            if (expr->right->type == ASTNode::VARIABLE && expr->right->name == var) {
+                return Value::make_string(ast_to_string(expr->left) + "*ln|" + var + "|");
+            }
+        }
+        if (expr->right->type == ASTNode::VARIABLE && expr->right->name == var) {
+            if (expr->left->type == ASTNode::NUMBER && expr->left->number == BigRat(1)) {
+                return Value::make_string("ln|" + var + "|");
+            }
+        }
+    }
+    if (expr->type == ASTNode::BINOP && (expr->op == '+' || expr->op == '-')) {
+        Value l = eval_inttable(ASTNode::make_func("inttable", {expr->left}));
+        Value r = eval_inttable(ASTNode::make_func("inttable", {expr->right}));
+        std::string ls = l.is_string() ? l.to_string() : "?";
+        std::string rs = r.is_string() ? r.to_string() : "?";
+        if (expr->op == '+') return Value::make_string(ls + " + " + rs);
+        return Value::make_string(ls + " - " + rs);
+    }
+    if (expr->type == ASTNode::UNARYOP && expr->op == '-') {
+        Value inner = eval_inttable(ASTNode::make_func("inttable", {expr->left}));
+        std::string s = inner.is_string() ? inner.to_string() : "?";
+        return Value::make_string("-(" + s + ")");
+    }
+    return Value::make_string("No known antiderivative for " + ast_to_string(expr));
+}
+
+Value Evaluator::eval_recur(ASTPtr node) {
+    if (node->args.size() != 4)
+        return Value::make_error("recur(expr, var, init, n) requires 4 arguments");
+    auto expr = node->args[0];
+    std::string var;
+    if (node->args[1]->type == ASTNode::VARIABLE) var = node->args[1]->name;
+    else return Value::make_error("Second argument of recur must be a variable");
+    Value init_val = eval_node(node->args[2]);
+    if (init_val.is_error()) return init_val;
+    Value n_val = eval_node(node->args[3]);
+    if (n_val.is_error()) return n_val;
+    if (!n_val.is_rational()) return Value::make_error("n must be a non-negative integer");
+    BigRat nr = n_val.to_rational();
+    if (nr.denominator() != BigInt(1) || nr < BigRat(0))
+        return Value::make_error("n must be a non-negative integer");
+    int64_t n = nr.numerator().to_int64();
+
+    Value current = init_val;
+    for (int64_t i = 1; i <= n; i++) {
+        Value next = substitute(expr, var, current);
+        if (next.is_error()) return next;
+        current = next;
+    }
+    return current;
+}
+
 static std::vector<std::complex<double>> solve_cubic_d(double a, double b,
                                                         double c, double d) {
     if (fabs(a) < 1e-15) return solve_quad_d(b, c, d);
@@ -1219,6 +1538,14 @@ Value Evaluator::eval_int(ASTPtr node) {
 }
 
 Value Evaluator::eval_diff(ASTPtr node) {
+    if (node->args.size() == 2) {
+        auto expr = node->args[0];
+        std::string var;
+        if (node->args[1]->type == ASTNode::VARIABLE) var = node->args[1]->name;
+        else return Value::make_error("Second argument of diff must be a variable");
+        ASTPtr deriv = sdiff(expr, var);
+        return Value::make_string(ast_to_string(deriv));
+    }
     if (node->args.size() != 3)
         return Value::make_error("diff(expr, var, point) requires 3 arguments");
     auto expr = node->args[0];
@@ -1464,6 +1791,40 @@ Value Evaluator::eval_convert(const Value& v, const std::string& from_raw, const
 Value Evaluator::eval_function(ASTPtr node) {
     const std::string& name = node->name;
     auto& args = node->args;
+
+    if (has_user_function(name)) {
+        auto& uf = user_functions_[name];
+        auto& params = uf.first;
+        auto& body = uf.second;
+        if (args.size() != params.size())
+            return Value::make_error(name + " expects " + std::to_string(params.size()) + " arguments");
+        ASTPtr substituted = body;
+        for (size_t i = 0; i < params.size(); i++) {
+            Value arg_val = eval_node(args[i]);
+            if (arg_val.is_error()) return arg_val;
+            ASTPtr var_node = ASTNode::make_var(params[i]);
+            auto do_sub = [var_node, arg_val](ASTPtr n, auto& self) -> ASTPtr {
+                if (!n) return n;
+                if (n->type == ASTNode::VARIABLE && n->name == var_node->name) {
+                    return ASTNode::make_num(arg_val.is_rational() ? arg_val.to_rational() : BigRat(0));
+                }
+                if (n->type == ASTNode::BINOP) {
+                    return ASTNode::make_binop(n->op, self(n->left, self), self(n->right, self));
+                }
+                if (n->type == ASTNode::UNARYOP) {
+                    return ASTNode::make_unaryop(n->op, self(n->left, self));
+                }
+                if (n->type == ASTNode::FUNCTION) {
+                    std::vector<ASTPtr> new_args;
+                    for (auto& a : n->args) new_args.push_back(self(a, self));
+                    return ASTNode::make_func(n->name, new_args);
+                }
+                return n;
+            };
+            substituted = do_sub(substituted, do_sub);
+        }
+        return eval_node(substituted);
+    }
 
     if (name == "sin") {
         if (args.size() != 1) return Value::make_error("sin requires 1 argument");
@@ -1824,6 +2185,18 @@ Value Evaluator::eval_function(ASTPtr node) {
         if (args.size() != 1) return Value::make_error("simplify requires 1 argument");
         return eval_simplify(args[0]);
     }
+    if (name == "taylor") {
+        return eval_taylor(node);
+    }
+    if (name == "limit") {
+        return eval_limit(node);
+    }
+    if (name == "inttable") {
+        return eval_inttable(node);
+    }
+    if (name == "recur") {
+        return eval_recur(node);
+    }
     return Value::make_error("Unknown function: " + name);
 }
 
@@ -2163,4 +2536,148 @@ std::string Evaluator::format_result(const Value& v, int base) {
         return exact + " ~= " + approx;
     }
     return v.to_string();
+}
+
+std::string Evaluator::format_latex(const Value& v) {
+    if (v.is_error()) return v.to_string();
+    if (v.is_string()) return v.to_string();
+    if (v.is_complex()) {
+        std::string r = format_latex(*v.complex.real);
+        std::string i = format_latex(*v.complex.imag);
+        if (v.complex.imag->is_zero()) return r;
+        if (v.complex.real->is_zero()) {
+            if (i == "1") return "i";
+            if (i == "-1") return "-i";
+            return i + "i";
+        }
+        if (i == "1") return r + " + i";
+        if (i == "-1") return r + " - i";
+        return r + " + " + i + "i";
+    }
+    if (v.is_vector()) {
+        std::string r = "\\left(";
+        for (size_t i = 0; i < v.vec.size(); i++) {
+            if (i > 0) r += ", ";
+            r += format_latex(v.vec[i]);
+        }
+        r += "\\right)";
+        return r;
+    }
+    if (v.is_matrix()) {
+        std::string r = "\\begin{pmatrix}";
+        for (size_t i = 0; i < v.mat.size(); i++) {
+            for (size_t j = 0; j < v.mat[i].size(); j++) {
+                if (j > 0) r += " & ";
+                r += format_latex(v.mat[i][j]);
+            }
+            if (i + 1 < v.mat.size()) r += " \\\\ ";
+        }
+        r += "\\end{pmatrix}";
+        return r;
+    }
+    if (v.type == Value::SURDS) {
+        if (v.surds.is_rational()) {
+            BigRat r = v.surds.to_rational();
+            if (r.denominator() == BigInt(1)) return r.numerator().to_string();
+            return "\\frac{" + r.numerator().to_string() + "}{" + r.denominator().to_string() + "}";
+        }
+        std::string result;
+        bool first = true;
+        for (auto& t : v.surds.terms) {
+            if (t.coeff.is_zero()) continue;
+            bool is_rat = t.radicand == BigInt(1);
+            bool is_pi = t.radicand == BigInt(-1);
+            bool is_e = t.radicand == BigInt(-2);
+            BigRat abs_coeff = t.coeff.abs();
+            bool neg = t.coeff < BigRat(0);
+            if (first) {
+                if (neg) result += "-";
+                first = false;
+            } else {
+                result += neg ? " - " : " + ";
+            }
+            if (is_rat) {
+                if (abs_coeff.denominator() == BigInt(1)) {
+                    result += abs_coeff.numerator().to_string();
+                } else {
+                    result += "\\frac{" + abs_coeff.numerator().to_string() + "}{" + abs_coeff.denominator().to_string() + "}";
+                }
+            } else {
+                BigInt p = abs_coeff.numerator().abs();
+                BigInt q = abs_coeff.denominator();
+                bool p_is_one = p == BigInt(1);
+                bool q_is_one = q == BigInt(1);
+                std::string sym;
+                if (is_pi) sym = "\\pi";
+                else if (is_e) sym = "e";
+                else sym = "\\sqrt{" + t.radicand.to_string() + "}";
+                if (p_is_one && q_is_one) {
+                    result += sym;
+                } else if (p_is_one && !q_is_one) {
+                    result += "\\frac{" + sym + "}{" + q.to_string() + "}";
+                } else if (!p_is_one && q_is_one) {
+                    result += p.to_string() + sym;
+                } else {
+                    result += "\\frac{" + p.to_string() + sym + "}{" + q.to_string() + "}";
+                }
+            }
+        }
+        return result.empty() ? "0" : result;
+    }
+    return v.to_string();
+}
+
+std::string Evaluator::format_pretty_matrix(const Value& v) {
+    if (!v.is_matrix()) return format_result(v);
+    int rows = v.mat_rows();
+    int cols = v.mat_cols();
+    if (rows == 0 || cols == 0) return "[empty]";
+
+    std::vector<std::vector<std::string>> cells(rows);
+    std::vector<int> col_widths(cols, 0);
+    for (int i = 0; i < rows; i++) {
+        cells[i].resize(cols);
+        for (int j = 0; j < cols; j++) {
+            cells[i][j] = format_result(v.mat[i][j]);
+            int w = (int)cells[i][j].size();
+            if (w > col_widths[j]) col_widths[j] = w;
+        }
+    }
+
+    std::string top_left = "\xe2\x94\x8c";
+    std::string top_right = "\xe2\x94\x90";
+    std::string bot_left = "\xe2\x94\x94";
+    std::string bot_right = "\xe2\x94\x98";
+    std::string mid_left = "\xe2\x94\x9c";
+    std::string mid_right = "\xe2\x94\xa4";
+    std::string h_line = "\xe2\x94\x80";
+    std::string v_line = "\xe2\x94\x82";
+
+    auto make_hline = [&](const std::string& left, const std::string& right) -> std::string {
+        std::string s = left;
+        for (int j = 0; j < cols; j++) {
+            for (int k = 0; k < col_widths[j] + 2; k++) s += h_line;
+            if (j + 1 < cols) s += "\xe2\x94\xac";
+        }
+        s += right + "\n";
+        return s;
+    };
+
+    std::string result;
+    result += make_hline(top_left, top_right);
+    for (int i = 0; i < rows; i++) {
+        result += v_line;
+        for (int j = 0; j < cols; j++) {
+            int pad = col_widths[j] - (int)cells[i][j].size();
+            int left_pad = pad / 2;
+            int right_pad = pad - left_pad;
+            result += " " + std::string(left_pad, ' ') + cells[i][j] + std::string(right_pad, ' ') + " " + v_line;
+        }
+        result += "\n";
+        if (i + 1 < rows) {
+            result += make_hline(mid_left, mid_right);
+        }
+    }
+    result += make_hline(bot_left, bot_right);
+    return result;
 }
