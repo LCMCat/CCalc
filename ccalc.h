@@ -530,6 +530,10 @@ public:
     void set_latex_mode(bool m) { latex_mode_ = m; }
     bool latex_mode() const { return latex_mode_; }
 
+    auto& user_functions() { return user_functions_; }
+
+    std::string get_user_func_string(const std::string& name) const;
+
     static std::string format_result(const Value& v, int base = 10);
     static std::string format_latex(const Value& v);
     static std::string format_pretty_matrix(const Value& v);
@@ -574,6 +578,7 @@ private:
     Value eval_gcd(const Value& a, const Value& b);
     Value eval_lcm(const Value& a, const Value& b);
     Value eval_factor(const Value& v);
+    Value eval_euler_phi(const Value& v);
     Value eval_int(ASTPtr node);
     Value eval_diff(ASTPtr node);
     Value eval_sum(ASTPtr node);
@@ -620,6 +625,8 @@ private:
     Value eval_limit(ASTPtr node);
     Value eval_inttable(ASTPtr node);
     Value eval_recur(ASTPtr node);
+    Value eval_table(ASTPtr node);
+    Value eval_lagrange(ASTPtr node);
 
     Value try_exact_trig(const BigRat& pi_coeff, int func);
     Value substitute(ASTPtr node, const std::string& var, const Value& val);

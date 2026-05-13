@@ -754,6 +754,97 @@ std::map<std::string, std::pair<std::vector<std::string>, ASTPtr>> user_function
 - a=0 时二次方程退化为一次方程 bx+c=0，返回单根 -c/b
 - a=b=0 时，若 c=0 返回"无穷多解"，否则返回"无解"
 
+### 5.14 欧拉函数
+
+**函数**：`euler_phi(n)` 或 `phi(n)` — 计算 Euler's totient function φ(n)
+
+**定义**：φ(n) 为小于 n 且与 n 互素的正整数个数。
+
+**算法**：基于质因数分解的公式 φ(n) = n × Π(1 - 1/p)，其中 p 遍历 n 的所有不同质因子。
+
+**实现**：
+1. `result = n`
+2. 对 n 进行试除法分解
+3. 对每个不同的质因子 d：`result -= result / d`
+4. 若最后 `temp > 1`（剩余一个大质因子）：`result -= result / temp`
+
+**示例**：
+- `euler_phi(1)` → 1
+- `euler_phi(10)` → 4（1,3,7,9 与 10 互素）
+- `euler_phi(30)` → 8
+- `phi(100)` → 40
+
+### 5.15 函数值表
+
+**函数**：`table(expr, var, from, to[, step])` — 输出函数在不同变量值下的结果
+
+**实现**：
+1. 解析参数：表达式、变量名、起始值、终止值、步长（默认 1）
+2. 从 `from` 到 `to` 以 `step` 为步长遍历
+3. 每个值通过 `substitute(expr, var, val)` 求值
+4. 格式化输出：`var = value => result`
+
+**示例**：
+- `table(x^2, x, 0, 5)` → x=0→0, x=1→1, ..., x=5→25
+- `table(sin(x), x, 0, 6, 1)` → sin(x) 在 x=0,1,...,6 处的值
+
+### 5.16 拉格朗日乘数法
+
+**函数**：`lagrange(f, g, x, y)` — 在约束 g(x,y)=0 下求 f(x,y) 的极值
+
+**算法**：
+1. 使用 `sdiff` 计算偏导数：∂f/∂x, ∂f/∂y, ∂g/∂x, ∂g/∂y
+2. 输出方程组：∂f/∂x = λ·∂g/∂x, ∂f/∂y = λ·∂g/∂y, g(x,y) = 0
+3. 在 [-3,3]×[-3,3] 网格上以步长 1 生成初始点
+4. 对每个初始点进行最多 20 次 Newton 迭代：
+   - 计算约束函数值 g(x,y)
+   - 计算偏导数值
+   - 根据 ∇f 和 ∇g 的方向调整 x, y
+   - 收敛条件：|dx| < 1e-10, |dy| < 1e-10, |g| < 1e-8
+5. 去重：距离 < 0.01 的点视为同一驻点
+6. 输出所有驻点及其函数值
+
+**实现细节**：
+- 求值时临时降低精度到 15 位以加速计算
+- 使用 `BigRat` 近似值代替 `BigFloat` 避免负数幂问题
+- `eval_at` lambda 函数通过 `set_variable` + `eval_node` 求值
+
+**示例**：
+- `lagrange(x+y, x^2+y^2-1, x, y)` → 在单位圆上找 x+y 的极值
+  - 最大值 f=1 在 (0,1) 和 (1,0)
+  - 最小值 f=-1 在 (-1,0) 和 (0,-1)
+
+### 5.17 符号求导化简
+
+**化简器**：`simplify_ast(ASTPtr)` — 对 AST 进行代数化简
+
+**化简规则**：
+
+| 规则 | 示例 |
+|------|------|
+| 0 + x → x | `0+x` → `x` |
+| x + 0 → x | `x+0` → `x` |
+| x - 0 → x | `x-0` → `x` |
+| 0 - x → -x | `0-x` → `-x` |
+| 0 * x → 0 | `0*x` → `0` |
+| 1 * x → x | `1*x` → `x` |
+| -1 * x → -x | `-1*x` → `-x` |
+| x / 1 → x | `x/1` → `x` |
+| 0 / x → 0 | `0/x` → `0` |
+| x ^ 0 → 1 | `x^0` → `1` |
+| x ^ 1 → x | `x^1` → `x` |
+| 0 ^ x → 0 | `0^x` → `0` |
+| x - x → 0 | `x-x` → `0` |
+| x / x → 1 | `x/x` → `1` |
+| 常数折叠 | `2*3` → `6`, `2+3` → `5` |
+| -(-x) → x | 双重取消除去 |
+| x - (-y) → x + y | 负号吸收 |
+| 系数合并 | `2*(3*x)` → `6*x` |
+
+**AST 相等性**：`ast_equal(a, b)` 递归比较两棵 AST 是否结构完全相同，用于检测 x-x 和 x/x 模式。
+
+**优先级感知输出**：`ast_to_string` 根据运算符优先级（+/-=1, */÷=2, ^=3, 其他=4）决定是否添加括号，避免冗余括号。
+
 ## 6. 输出格式化
 
 ### 6.1 常规格式化
@@ -900,14 +991,14 @@ std::map<std::string, std::pair<std::vector<std::string>, ASTPtr>> user_function
 
 **实现**：`syntax_highlight()` 函数对输入字符串进行实时着色。
 
-**颜色方案**（ANSI 转义码）：
+**颜色方案**（ANSI 转义码，默认主题）：
 
 | 元素 | 颜色 | ANSI 码 | 示例 |
 |------|------|---------|------|
-| 数字 | 灰色 | `\033[90m` | `3.14`, `0xFF` |
+| 数字 | 灰色 | `\033[2;37m` | `3.14`, `0xFF` |
 | 函数名 | 绿色 | `\033[32m` | `sin`, `cos`, `det` |
 | 运算符 | 黄色 | `\033[33m` | `+`, `-`, `*`, `/`, `^`, `%` |
-| 常量 | 灰色 | `\033[90m` | `pi`, `e` |
+| 常量 | 灰色 | `\033[2;37m` | `pi`, `e` |
 | 其他 | 默认色 | — | 变量名 `x`, 括号等 |
 
 **分词规则**：
@@ -932,6 +1023,92 @@ std::map<std::string, std::pair<std::vector<std::string>, ASTPtr>> user_function
 **限制**：
 - 使用 `std::getline` 读取（非 `_getch`），因此不支持交互式功能
 - 图形命令被跳过（无窗口环境）
+
+### 8.6 多行输入
+
+**实现**：`read_full_line()` 函数在 `readline_custom()` 之上实现续行逻辑。
+
+**续行条件**：
+1. **显式续行**：行尾为 `\` 时，移除 `\`，继续读取下一行（提示符变为 `...> `）
+2. **自动续行**：括号不匹配时（`count_unmatched() > 0`），自动继续读取下一行
+
+**括号计数**：`count_unmatched(s)` 统计未匹配的 `(`、`)`、`[`、`]`，返回净未匹配数。
+
+**历史记录处理**：
+- 续行中间的行不加入历史
+- 最终完整输入作为一条历史记录
+
+**示例**：
+```
+CCalc> solve(1, \
+...> 2, 1)
+(-1, -1)
+
+CCalc> det([1,2;
+...> 3,4])
+-2
+```
+
+### 8.7 配色主题
+
+**数据结构**：`ColorTheme` 结构体包含主题名称和四种颜色码（数字、函数、运算符、常量）。
+
+**内置主题**：
+
+| 主题名 | 数字 | 函数 | 运算符 | 常量 |
+|--------|------|------|--------|------|
+| `default` | dim white (灰) | green (绿) | yellow (黄) | dim white (灰) |
+| `dark` | white (白) | cyan (青) | magenta (紫) | white (白) |
+| `light` | black (黑) | blue (蓝) | red (红) | black (黑) |
+| `neon` | bright cyan (亮青) | bright green (亮绿) | bright yellow (亮黄) | bright cyan (亮青) |
+| `none` | 无色 | 无色 | 无色 | 无色 |
+
+**切换命令**：
+- `theme` — 列出可用主题和当前主题
+- `theme dark` — 切换到 dark 主题
+
+**实现**：`syntax_highlight()` 函数读取 `themes[g_theme_idx]` 获取当前颜色码。
+
+### 8.8 中文模式
+
+**切换命令**：`zh` 切换到中文，`en` 切换到英文。
+
+**翻译机制**：`T(const char* en, const char* zh)` 函数根据 `g_chinese` 标志返回对应语言的字符串。
+
+**翻译范围**：
+- 欢迎信息
+- 帮助文本（完整中文版 `print_help()`）
+- 错误消息
+- 状态消息（角度模式、精度、进制、LaTeX 模式等）
+- 退出消息
+
+**限制**：计算结果本身不翻译（数学符号通用）。
+
+### 8.9 配置文件
+
+**路径**：
+- Windows：`%APPDATA%\ccalcconfig`
+- Linux/macOS：`~/.ccalcconfig`
+
+**格式**：`key=value`，`#` 开头为注释。
+
+**保存的配置项**：
+
+| 键 | 值 | 示例 |
+|----|-----|------|
+| `precision` | 整数 | `precision=50` |
+| `angle_mode` | `deg` 或 `rad` | `angle_mode=rad` |
+| `latex_mode` | `on` 或 `off` | `latex_mode=off` |
+| `language` | `zh` 或 `en` | `language=zh` |
+| `theme` | 主题名 | `theme=neon` |
+| `output_base` | 整数 | `output_base=10` |
+| `custom_func` | 函数定义 | `custom_func=f(x):=x^2+1` |
+
+**加载时机**：程序启动时调用 `load_config()`，若文件不存在则使用默认值。
+
+**保存时机**：输入 `quit` 或 `exit` 时调用 `save_config()`。
+
+**自定义函数序列化**：通过 `Evaluator::get_user_func_string(name)` 获取函数定义字符串，保存为 `custom_func=名(参数):=表达式` 格式。加载时通过 `parse_custom_function()` 重新解析和注册。
 
 ## 9. 编译与构建
 

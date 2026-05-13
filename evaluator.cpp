@@ -2,6 +2,7 @@
 #include <complex>
 #include <algorithm>
 #include <sstream>
+#include <iomanip>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -246,20 +247,172 @@ Value Evaluator::eval_median(const std::vector<Value>& args) {
     catch (...) { return Value(BigFloat(med)); }
 }
 
+static bool is_num(ASTPtr n, long long v = -999999) {
+    if (!n || n->type != ASTNode::NUMBER) return false;
+    if (v == -999999) return true;
+    return n->number == BigRat(v);
+}
+
+static bool is_num_zero(ASTPtr n) { return is_num(n, 0); }
+static bool is_num_one(ASTPtr n) { return is_num(n, 1); }
+static bool is_num_neg_one(ASTPtr n) { return is_num(n, -1); }
+
+static bool ast_equal(ASTPtr a, ASTPtr b) {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    if (a->type != b->type) return false;
+    switch (a->type) {
+    case ASTNode::NUMBER: return a->number == b->number;
+    case ASTNode::CONSTANT: case ASTNode::VARIABLE: return a->name == b->name;
+    case ASTNode::BINOP: return a->op == b->op && ast_equal(a->left, b->left) && ast_equal(a->right, b->right);
+    case ASTNode::UNARYOP: return a->op == b->op && ast_equal(a->left, b->left);
+    case ASTNode::FUNCTION:
+        if (a->name != b->name || a->args.size() != b->args.size()) return false;
+        for (size_t i = 0; i < a->args.size(); i++)
+            if (!ast_equal(a->args[i], b->args[i])) return false;
+        return true;
+    default: return false;
+    }
+}
+
+static ASTPtr simplify_ast(ASTPtr node) {
+    if (!node) return node;
+    if (node->type == ASTNode::BINOP) {
+        auto l = simplify_ast(node->left);
+        auto r = simplify_ast(node->right);
+        if (is_num_zero(l) && node->op == '+') return r;
+        if (is_num_zero(r) && node->op == '+') return l;
+        if (is_num_zero(r) && node->op == '-') return l;
+        if (is_num_zero(l) && node->op == '-') {
+            if (r->type == ASTNode::UNARYOP && r->op == '-')
+                return r->left;
+            return ASTNode::make_unaryop('-', r);
+        }
+        if (is_num_zero(l) && node->op == '*') return ASTNode::make_num(BigRat(0));
+        if (is_num_zero(r) && node->op == '*') return ASTNode::make_num(BigRat(0));
+        if (is_num_one(l) && node->op == '*') return r;
+        if (is_num_one(r) && node->op == '*') return l;
+        if (is_num_neg_one(l) && node->op == '*') {
+            return ASTNode::make_unaryop('-', r);
+        }
+        if (is_num_neg_one(r) && node->op == '*') {
+            return ASTNode::make_unaryop('-', l);
+        }
+        if (is_num_one(r) && node->op == '/') return l;
+        if (is_num_zero(l) && node->op == '/') return ASTNode::make_num(BigRat(0));
+        if (ast_equal(l, r) && node->op == '-') return ASTNode::make_num(BigRat(0));
+        if (ast_equal(l, r) && node->op == '/') return ASTNode::make_num(BigRat(1));
+        if (is_num_zero(r) && node->op == '^') return ASTNode::make_num(BigRat(1));
+        if (is_num_one(r) && node->op == '^') return l;
+        if (is_num_zero(l) && node->op == '^') return ASTNode::make_num(BigRat(0));
+        if (l->type == ASTNode::NUMBER && r->type == ASTNode::NUMBER) {
+            if (node->op == '+') return ASTNode::make_num(l->number + r->number);
+            if (node->op == '-') return ASTNode::make_num(l->number - r->number);
+            if (node->op == '*') return ASTNode::make_num(l->number * r->number);
+            if (node->op == '/' && r->number != BigRat(0))
+                return ASTNode::make_num(l->number / r->number);
+            if (node->op == '^' && r->number.denominator() == BigInt(1)) {
+                long long e = r->number.numerator().to_int64();
+                if (e >= 0 && e <= 20) {
+                    BigRat result(1);
+                    BigRat base = l->number;
+                    for (long long i = 0; i < e; i++) result = result * base;
+                    return ASTNode::make_num(result);
+                }
+            }
+        }
+        if (node->op == '*') {
+            if (l->type == ASTNode::NUMBER && r->type == ASTNode::BINOP && r->op == '*') {
+                if (r->left->type == ASTNode::NUMBER) {
+                    auto coeff = ASTNode::make_num(l->number * r->left->number);
+                    return simplify_ast(ASTNode::make_binop('*', coeff, r->right));
+                }
+            }
+            if (r->type == ASTNode::NUMBER && l->type == ASTNode::BINOP && l->op == '*') {
+                if (l->left->type == ASTNode::NUMBER) {
+                    auto coeff = ASTNode::make_num(r->number * l->left->number);
+                    return simplify_ast(ASTNode::make_binop('*', coeff, l->right));
+                }
+            }
+        }
+        if (node->op == '-' && r->type == ASTNode::UNARYOP && r->op == '-') {
+            return simplify_ast(ASTNode::make_binop('+', l, r->left));
+        }
+        if (node->op == '+' && r->type == ASTNode::UNARYOP && r->op == '-') {
+            return simplify_ast(ASTNode::make_binop('-', l, r->left));
+        }
+        if (node->op == '+' && l->type == ASTNode::UNARYOP && l->op == '-') {
+            return simplify_ast(ASTNode::make_binop('-', r, l->left));
+        }
+        return ASTNode::make_binop(node->op, l, r);
+    }
+    if (node->type == ASTNode::UNARYOP) {
+        auto child = simplify_ast(node->left);
+        if (node->op == '-' && child->type == ASTNode::UNARYOP && child->op == '-')
+            return child->left;
+        if (node->op == '-' && child->type == ASTNode::NUMBER)
+            return ASTNode::make_num(-child->number);
+        return ASTNode::make_unaryop(node->op, child);
+    }
+    if (node->type == ASTNode::FUNCTION) {
+        std::vector<ASTPtr> new_args;
+        for (auto& a : node->args) new_args.push_back(simplify_ast(a));
+        return ASTNode::make_func(node->name, new_args);
+    }
+    return node;
+}
+
+static int ast_prec(ASTPtr node) {
+    if (!node) return 0;
+    if (node->type == ASTNode::BINOP) {
+        if (node->op == '+' || node->op == '-') return 1;
+        if (node->op == '*' || node->op == '/') return 2;
+        if (node->op == '^') return 3;
+    }
+    return 4;
+}
+
 static std::string ast_to_string(ASTPtr node) {
     if (!node) return "";
     switch (node->type) {
-    case ASTNode::NUMBER: return node->number.to_string();
+    case ASTNode::NUMBER: {
+        if (node->number.denominator() != BigInt(1)) {
+            return "(" + node->number.to_string() + ")";
+        }
+        return node->number.to_string();
+    }
     case ASTNode::CONSTANT: return node->name;
     case ASTNode::VARIABLE: return node->name;
     case ASTNode::BINOP: {
         std::string l = ast_to_string(node->left);
         std::string r = ast_to_string(node->right);
-        if (node->op == '+') return l + "+" + r;
-        if (node->op == '-') return l + "-" + r;
-        if (node->op == '*') return "(" + l + ")*(" + r + ")";
-        if (node->op == '/') return "(" + l + ")/(" + r + ")";
-        if (node->op == '^') return "(" + l + ")^(" + r + ")";
+        int lp = ast_prec(node->left), rp = ast_prec(node->right);
+        int cp = ast_prec(node);
+        if (node->op == '+') {
+            if (lp < cp) l = "(" + l + ")";
+            if (rp < cp) r = "(" + r + ")";
+            return l + "+" + r;
+        }
+        if (node->op == '-') {
+            if (lp < cp) l = "(" + l + ")";
+            if (rp <= cp) r = "(" + r + ")";
+            return l + "-" + r;
+        }
+        if (node->op == '*') {
+            if (lp < cp) l = "(" + l + ")";
+            if (rp < cp) r = "(" + r + ")";
+            return l + "*" + r;
+        }
+        if (node->op == '/') {
+            if (lp < cp) l = "(" + l + ")";
+            if (rp <= cp) r = "(" + r + ")";
+            return l + "/" + r;
+        }
+        if (node->op == '^') {
+            if (lp < cp) l = "(" + l + ")";
+            if (rp <= cp) r = "(" + r + ")";
+            return l + "^" + r;
+        }
         return l + "?" + r;
     }
     case ASTNode::UNARYOP:
@@ -628,6 +781,163 @@ Value Evaluator::eval_recur(ASTPtr node) {
         current = next;
     }
     return current;
+}
+
+Value Evaluator::eval_table(ASTPtr node) {
+    if (node->args.size() < 4 || node->args.size() > 5)
+        return Value::make_error("table(expr, var, from, to[, step]) requires 4-5 arguments");
+    auto expr = node->args[0];
+    std::string var;
+    if (node->args[1]->type == ASTNode::VARIABLE) var = node->args[1]->name;
+    else return Value::make_error("Second argument of table must be a variable");
+    Value from_val = eval_node(node->args[2]);
+    Value to_val = eval_node(node->args[3]);
+    if (from_val.is_error()) return from_val;
+    if (to_val.is_error()) return to_val;
+    double from_d = val_to_double(from_val);
+    double to_d = val_to_double(to_val);
+    double step = 1.0;
+    if (node->args.size() == 5) {
+        Value step_val = eval_node(node->args[4]);
+        if (step_val.is_error()) return step_val;
+        step = val_to_double(step_val);
+    }
+    if (step <= 0) return Value::make_error("Step must be positive");
+    std::string result;
+    std::ostringstream oss;
+    for (double v = from_d; v <= to_d + step * 1e-9; v += step) {
+        Value var_val(BigFloat(std::to_string(v)));
+        Value res = substitute(expr, var, var_val);
+        oss << var << " = ";
+        if (fabs(v - round(v)) < 1e-9) {
+            oss << (long long)round(v);
+        } else {
+            oss << std::fixed << std::setprecision(4) << v;
+        }
+        oss << "  =>  ";
+        if (res.is_error()) {
+            oss << "Error";
+        } else {
+            oss << res.to_string();
+        }
+        oss << "\n";
+    }
+    return Value::make_string(oss.str());
+}
+
+Value Evaluator::eval_lagrange(ASTPtr node) {
+    if (node->args.size() != 4)
+        return Value::make_error("lagrange(f, g, x, y) requires 4 arguments");
+    auto f_expr = node->args[0];
+    auto g_expr = node->args[1];
+    std::string var_x, var_y;
+    if (node->args[2]->type == ASTNode::VARIABLE) var_x = node->args[2]->name;
+    else return Value::make_error("Third argument of lagrange must be a variable");
+    if (node->args[3]->type == ASTNode::VARIABLE) var_y = node->args[3]->name;
+    else return Value::make_error("Fourth argument of lagrange must be a variable");
+
+    auto dfdx = simplify_ast(sdiff(f_expr, var_x));
+    auto dfdy = simplify_ast(sdiff(f_expr, var_y));
+    auto dgdx = simplify_ast(sdiff(g_expr, var_x));
+    auto dgdy = simplify_ast(sdiff(g_expr, var_y));
+
+    std::ostringstream oss;
+    oss << "Lagrange multiplier method:" << std::endl;
+    oss << "f = " << ast_to_string(f_expr) << std::endl;
+    oss << "g = " << ast_to_string(g_expr) << " = 0" << std::endl;
+    oss << "df/d" << var_x << " = " << ast_to_string(dfdx) << std::endl;
+    oss << "df/d" << var_y << " = " << ast_to_string(dfdy) << std::endl;
+    oss << "dg/d" << var_x << " = " << ast_to_string(dgdx) << std::endl;
+    oss << "dg/d" << var_y << " = " << ast_to_string(dgdy) << std::endl;
+    oss << std::endl;
+    oss << "System of equations:" << std::endl;
+    oss << "  df/d" << var_x << " = lambda * dg/d" << var_x << std::endl;
+    oss << "  df/d" << var_y << " = lambda * dg/d" << var_y << std::endl;
+    oss << "  g(" << var_x << "," << var_y << ") = 0" << std::endl;
+
+    auto eval_at = [&](ASTPtr expr, const std::string& vx, double xv,
+                       const std::string& vy, double yv) -> double {
+        long long xnum = (long long)std::round(xv * 10000);
+        long long ynum = (long long)std::round(yv * 10000);
+        Value old_x = get_variable(vx);
+        Value old_y = get_variable(vy);
+        int old_prec = g_precision;
+        g_precision = 15;
+        set_variable(vx, Value(BigRat(xnum, 10000)));
+        set_variable(vy, Value(BigRat(ynum, 10000)));
+        Value r = eval_node(expr);
+        g_precision = old_prec;
+        set_variable(vx, old_x);
+        set_variable(vy, old_y);
+        if (r.is_error()) return 1e300;
+        return val_to_double(r);
+    };
+
+    auto f_at = [&](double xv, double yv) -> double {
+        return eval_at(f_expr, var_x, xv, var_y, yv);
+    };
+
+    struct CriticalPoint { double x, y, f_val; };
+    std::vector<CriticalPoint> points;
+
+    for (double x0 = -3.0; x0 <= 3.0; x0 += 1.0) {
+        for (double y0 = -3.0; y0 <= 3.0; y0 += 1.0) {
+            double xv = x0, yv = y0;
+            for (int iter = 0; iter < 20; iter++) {
+                double gv = eval_at(g_expr, var_x, xv, var_y, yv);
+                double dfx = eval_at(dfdx, var_x, xv, var_y, yv);
+                double dfy = eval_at(dfdy, var_x, xv, var_y, yv);
+                double dgx = eval_at(dgdx, var_x, xv, var_y, yv);
+                double dgy = eval_at(dgdy, var_x, xv, var_y, yv);
+
+                double h = 1e-7;
+                double dgx_px = (eval_at(g_expr, var_x, xv+h, var_y, yv) - gv) / h;
+                double dgy_py = (eval_at(g_expr, var_x, xv, var_y, yv+h) - gv) / h;
+
+                if (fabs(dgx) < 1e-12 && fabs(dgy) < 1e-12) break;
+
+                double dx = 0, dy = 0;
+                if (fabs(dgx) > fabs(dgy)) {
+                    double lambda = dfx / dgx;
+                    dy = -gv / (fabs(dgy) > 1e-12 ? dgy : 1.0) * 0.1;
+                    dx = -(dgx * dy + gv) / (fabs(dgx_px) > 1e-12 ? dgx_px : 1.0) * 0.1;
+                } else {
+                    double lambda = dfy / dgy;
+                    dx = -gv / (fabs(dgx) > 1e-12 ? dgx : 1.0) * 0.1;
+                    dy = -(dgy * dx + gv) / (fabs(dgy_py) > 1e-12 ? dgy_py : 1.0) * 0.1;
+                }
+
+                xv += dx * 0.5;
+                yv += dy * 0.5;
+
+                if (fabs(dx) < 1e-10 && fabs(dy) < 1e-10 && fabs(gv) < 1e-8) break;
+            }
+
+            double gv = eval_at(g_expr, var_x, xv, var_y, yv);
+            if (fabs(gv) > 1e-6) continue;
+
+            bool dup = false;
+            for (auto& p : points) {
+                if (fabs(p.x - xv) < 0.01 && fabs(p.y - yv) < 0.01) { dup = true; break; }
+            }
+            if (!dup) {
+                points.push_back({xv, yv, f_at(xv, yv)});
+            }
+        }
+    }
+
+    if (points.empty()) {
+        oss << std::endl << "No critical points found in [-5,5]x[-5,5]" << std::endl;
+    } else {
+        oss << std::endl << "Critical points:" << std::endl;
+        for (auto& p : points) {
+            oss << "  (" << var_x << ", " << var_y << ") = ("
+                << std::fixed << std::setprecision(6) << p.x << ", " << p.y << ")"
+                << "  f = " << p.f_val << std::endl;
+        }
+    }
+
+    return Value::make_string(oss.str());
 }
 
 static std::vector<std::complex<double>> solve_cubic_d(double a, double b,
@@ -1375,6 +1685,29 @@ Value Evaluator::eval_factor(const Value& v) {
     return Value::make_string(result);
 }
 
+Value Evaluator::eval_euler_phi(const Value& v) {
+    if (!v.is_rational())
+        return Value::make_error("euler_phi requires positive integer");
+    BigRat r = v.to_rational();
+    if (r.denominator() != BigInt(1) || r <= BigRat(0))
+        return Value::make_error("euler_phi requires positive integer");
+    BigInt n = r.numerator();
+    if (n == BigInt(1)) return Value(BigRat(1));
+    int64_t nv = n.to_int64();
+    if (nv <= 0)
+        return Value::make_error("euler_phi requires positive integer");
+    int64_t result = nv;
+    int64_t temp = nv;
+    for (int64_t d = 2; d * d <= temp; d++) {
+        if (temp % d == 0) {
+            while (temp % d == 0) temp /= d;
+            result -= result / d;
+        }
+    }
+    if (temp > 1) result -= result / temp;
+    return Value(BigRat(result));
+}
+
 Value Evaluator::substitute(ASTPtr node, const std::string& var, const Value& val) {
     if (!node) return Value::make_error("Null node");
     switch (node->type) {
@@ -1544,6 +1877,7 @@ Value Evaluator::eval_diff(ASTPtr node) {
         if (node->args[1]->type == ASTNode::VARIABLE) var = node->args[1]->name;
         else return Value::make_error("Second argument of diff must be a variable");
         ASTPtr deriv = sdiff(expr, var);
+        deriv = simplify_ast(deriv);
         return Value::make_string(ast_to_string(deriv));
     }
     if (node->args.size() != 3)
@@ -1788,6 +2122,20 @@ Value Evaluator::eval_convert(const Value& v, const std::string& from_raw, const
     return Value::make_error("Unknown unit conversion: " + from + " -> " + to);
 }
 
+std::string Evaluator::get_user_func_string(const std::string& name) const {
+    auto it = user_functions_.find(name);
+    if (it == user_functions_.end()) return "";
+    auto& params = it->second.first;
+    auto& body = it->second.second;
+    std::string s = name + "(";
+    for (size_t i = 0; i < params.size(); i++) {
+        if (i > 0) s += ",";
+        s += params[i];
+    }
+    s += "):=" + ast_to_string(body);
+    return s;
+}
+
 Value Evaluator::eval_function(ASTPtr node) {
     const std::string& name = node->name;
     auto& args = node->args;
@@ -1924,6 +2272,10 @@ Value Evaluator::eval_function(ASTPtr node) {
     if (name == "factor") {
         if (args.size() != 1) return Value::make_error("factor requires 1 argument");
         return eval_factor(eval_node(args[0]));
+    }
+    if (name == "euler_phi" || name == "euler" || name == "phi") {
+        if (args.size() != 1) return Value::make_error("euler_phi requires 1 argument");
+        return eval_euler_phi(eval_node(args[0]));
     }
     if (name == "int") {
         return eval_int(node);
@@ -2196,6 +2548,12 @@ Value Evaluator::eval_function(ASTPtr node) {
     }
     if (name == "recur") {
         return eval_recur(node);
+    }
+    if (name == "table") {
+        return eval_table(node);
+    }
+    if (name == "lagrange") {
+        return eval_lagrange(node);
     }
     return Value::make_error("Unknown function: " + name);
 }

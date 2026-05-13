@@ -6,7 +6,7 @@ static const std::vector<std::string> known_functions = {
     "sqrt", "cbrt", "nrt",
     "abs", "ln", "lg", "log",
     "fact", "perm", "P", "comb", "C",
-    "gcd", "lcm", "factor",
+    "gcd", "lcm", "factor", "euler_phi", "euler", "phi",
     "int", "diff", "sum", "prod",
     "complex", "re", "im", "conj", "arg", "mod",
     "rand", "randint",
@@ -16,7 +16,7 @@ static const std::vector<std::string> known_functions = {
     "matrix", "det", "inv", "eigen", "trace", "transpose", "identity",
     "mean", "stddev", "variance", "median",
     "simplify",
-    "taylor", "limit", "inttable", "recur"
+    "taylor", "limit", "inttable", "recur", "table", "lagrange"
 };
 
 static bool is_known_function(const std::string& name) {

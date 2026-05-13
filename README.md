@@ -65,6 +65,7 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 
 ### Number Theory
 - `factor(n)` — prime factorization (`factor(360)` → `2^3 * 3^2 * 5`)
+- `euler_phi(n)` or `phi(n)` — Euler's totient function (`euler_phi(10)` → `4`)
 - `gcd(a, b)`, `lcm(a, b)`
 - `P(n, k)` / `perm(n, k)` — permutation
 - `C(n, k)` / `comb(n, k)` — combination
@@ -127,6 +128,16 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 - Example: `recur(a+1, a, 1, 5)` → `6` (arithmetic: 1,2,3,4,5,6)
 - Example: `recur(a*2, a, 1, 10)` → `1024` (geometric: 1,2,4,...,1024)
 
+### Function Value Table
+- `table(expr, var, from, to[, step])` — output a table of function values
+- Example: `table(x^2, x, 0, 5)` → values of x² for x = 0,1,2,3,4,5
+- Example: `table(sin(x), x, 0, 6, 1)` → values of sin(x) for x = 0,1,...,6
+
+### Lagrange Multipliers
+- `lagrange(f, g, x, y)` — find extrema of f(x,y) subject to constraint g(x,y)=0
+- Outputs partial derivatives, system of equations, and critical points
+- Example: `lagrange(x+y, x^2+y^2-1, x, y)` → finds max/min of x+y on the unit circle
+
 ### LaTeX Output
 - `latex` command toggles LaTeX formatting mode
 - Fractions: `1/2` → `\frac{1}{2}`
@@ -144,6 +155,10 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 - **History navigation**: Up/Down arrow keys to browse previous inputs
 - **Tab completion**: Type `si` + Tab → `sin(`
 - **Syntax highlighting**: numbers (gray), functions (green), operators (yellow)
+- **Multi-line input**: End line with `\` to continue, or auto-continue when brackets are unmatched
+- **Color themes**: `theme` to list, `theme dark`/`theme neon`/`theme light`/`theme none` to switch
+- **Chinese mode**: `zh` to switch to Chinese, `en` to switch back to English
+- **Configuration file**: Settings (precision, angle mode, theme, custom functions) auto-saved on exit
 
 ### Function Graphing
 - `graph(expr)` — plot y=expr (e.g. `graph(sin(x))`, `graph(x^2-3*x+1)`)
@@ -213,6 +228,8 @@ All core arithmetic (BigInt, BigRat, BigFloat) is implemented from scratch, supp
 | `limit(sin(x)/x, x, 0)` | `1` |
 | `f(x) := x^2+1; f(3)` | `10` |
 | `recur(a+1, a, 1, 5)` | `6` |
+| `euler_phi(10)` | `4` |
+| `phi(30)` | `8` |
 
 ## Build
 
@@ -258,6 +275,9 @@ Run the calculator:
 | `base N` | Set output base (2–36) |
 | `prec N` | Set precision to N digits (1–10000) |
 | `latex` | Toggle LaTeX output mode |
+| `zh` | Switch to Chinese mode |
+| `en` | Switch to English mode |
+| `theme [name]` | List or switch color theme |
 | `ans` | Last answer |
 | `graph(expr)` | Plot function y=expr |
 | `help` | Show help |
