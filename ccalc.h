@@ -21,6 +21,7 @@
 #include <iomanip>
 
 extern int g_precision;
+extern int g_integral_steps;  // Default number of steps for numerical integration
 
 class CalcError : public std::runtime_error {
 public:
@@ -579,6 +580,8 @@ private:
     Value eval_lcm(const Value& a, const Value& b);
     Value eval_factor(const Value& v);
     Value eval_euler_phi(const Value& v);
+    Value eval_normal_pdf(const Value& x, const Value& mu, const Value& sigma);
+    Value eval_normal_cdf(const Value& x, const Value& mu, const Value& sigma);
     Value eval_int(ASTPtr node);
     Value eval_diff(ASTPtr node);
     Value eval_sum(ASTPtr node);
@@ -624,6 +627,11 @@ private:
     Value eval_taylor(ASTPtr node);
     Value eval_limit(ASTPtr node);
     Value eval_inttable(ASTPtr node);
+    Value eval_expand(ASTPtr node);
+    Value eval_triangle_area(ASTPtr node);
+    Value eval_polygon_area(ASTPtr node);
+    Value eval_distance(ASTPtr node);
+    Value eval_line_intersect(ASTPtr node);
     Value eval_recur(ASTPtr node);
     Value eval_table(ASTPtr node);
     Value eval_lagrange(ASTPtr node);

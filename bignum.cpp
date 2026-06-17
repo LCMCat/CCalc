@@ -1,6 +1,7 @@
 #include "ccalc.h"
 
 int g_precision = 110;
+int g_integral_steps = 1000;  // Default number of steps for numerical integration
 
 BigInt::BigInt(int64_t n) : neg_(n < 0) {
     if (n < 0) n = -n;

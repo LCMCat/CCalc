@@ -25,7 +25,7 @@ static const std::vector<std::string> all_function_names = {
     "sqrt", "cbrt", "nrt",
     "abs", "ln", "lg", "log",
     "fact", "perm", "P", "comb", "C",
-    "gcd", "lcm", "factor", "euler_phi", "euler", "phi",
+    "gcd", "lcm", "factor", "euler_phi", "euler", "phi", "normal_pdf", "normal_cdf",
     "int", "diff", "sum", "prod",
     "complex", "re", "im", "conj", "arg", "mod",
     "rand", "randint",
@@ -36,7 +36,7 @@ static const std::vector<std::string> all_function_names = {
     "mean", "stddev", "variance", "median",
     "simplify", "exp", "floor", "ceil", "round", "sign", "max", "min",
     "pow", "root", "log2", "atan2", "hypot",
-    "taylor", "limit", "inttable", "recur", "table", "lagrange"
+    "taylor", "limit", "inttable", "integrate", "expand", "partial", "triangle_area", "polygon_area", "distance", "line_intersect", "recur", "table", "lagrange"
 };
 
 static bool is_known_func(const std::string& name) {
@@ -196,6 +196,7 @@ static void print_help() {
         std::cout << "  graph_implicit(expr)            - 隐函数绘图 (如 graph_implicit(x^2+y^2-1))" << std::endl;
         std::cout << "  graph_param(t, x_expr, y_expr)  - 参数方程绘图 (如 graph_param(t, cos(t), sin(t)))" << std::endl;
         std::cout << "  graph_polar(r_expr)             - 极坐标绘图 (如 graph_polar(1+cos(theta)))" << std::endl;
+        std::cout << "  graph3d(expr)                   - 3D曲面绘图 (如 graph3d(sin(x)*cos(y)))" << std::endl;
         std::cout << std::endl;
         std::cout << "矩阵:" << std::endl;
         std::cout << "  [1,2;3,4]                       - 矩阵字面量" << std::endl;
@@ -303,6 +304,7 @@ static void print_help() {
     std::cout << "  graph_implicit(expr)            - Plot f(x,y)=0 (e.g. graph_implicit(x^2+y^2-1))" << std::endl;
     std::cout << "  graph_param(t, x_expr, y_expr)  - Plot parametric (e.g. graph_param(t, cos(t), sin(t)))" << std::endl;
     std::cout << "  graph_polar(r_expr)             - Plot polar r=f(theta) (e.g. graph_polar(1+cos(theta)))" << std::endl;
+    std::cout << "  graph3d(expr)                   - 3D surface plot (e.g. graph3d(sin(x)*cos(y)))" << std::endl;
     std::cout << std::endl;
     std::cout << "Matrix:" << std::endl;
     std::cout << "  [[1,2],[3,4]]                  - Matrix literal" << std::endl;
@@ -383,7 +385,7 @@ static std::vector<std::string> split_top_level(const std::string& input) {
 }
 
 struct GraphCmd {
-    enum Type { EXPLICIT, IMPLICIT, PARAMETRIC, POLAR, NONE };
+    enum Type { EXPLICIT, IMPLICIT, PARAMETRIC, POLAR, SURFACE3D, NONE };
     Type type = NONE;
     std::string expr, expr2;
 };
@@ -426,6 +428,9 @@ static GraphCmd parse_graph_cmd(const std::string& input) {
     } else if (s.size() >= 13 && s.substr(0, 11) == "graph_polar(" && s.back() == ')') {
         cmd.type = GraphCmd::POLAR;
         cmd.expr = trim(s.substr(11, s.size() - 12));
+    } else if (s.size() >= 10 && s.substr(0, 8) == "graph3d(" && s.back() == ')') {
+        cmd.type = GraphCmd::SURFACE3D;
+        cmd.expr = trim(s.substr(8, s.size() - 9));
     }
 
     return cmd;
@@ -674,6 +679,8 @@ static void load_config(Evaluator& evaluator) {
         std::string val = line.substr(eq + 1);
         if (key == "precision") {
             try { int p = std::stoi(val); if (p >= 1 && p <= 10000) g_precision = p; } catch(...) {}
+        } else if (key == "integral_steps") {
+            try { int s = std::stoi(val); if (s >= 100 && s <= 100000) g_integral_steps = s; } catch(...) {}
         } else if (key == "angle_mode") {
             if (val == "deg") evaluator.set_angle_mode(Evaluator::DEG);
             else evaluator.set_angle_mode(Evaluator::RAD);
@@ -705,6 +712,7 @@ static void save_config(Evaluator& evaluator) {
     if (!ofs.is_open()) return;
     ofs << "# CCalc configuration file" << std::endl;
     ofs << "precision=" << g_precision << std::endl;
+    ofs << "integral_steps=" << g_integral_steps << std::endl;
     ofs << "angle_mode=" << (evaluator.angle_mode() == Evaluator::DEG ? "deg" : "rad") << std::endl;
     ofs << "latex_mode=" << (evaluator.latex_mode() ? "on" : "off") << std::endl;
     ofs << "language=" << (g_chinese ? "zh" : "en") << std::endl;
@@ -908,6 +916,9 @@ int main(int argc, char* argv[]) {
                     } else if (gcmd.type == GraphCmd::POLAR) {
                         cmd = "start ccalc_graph.exe -l \"" + gcmd.expr + "\"";
                         std::cout << T("Graph: r = ", "绘图: r = ") << gcmd.expr << std::endl;
+                    } else if (gcmd.type == GraphCmd::SURFACE3D) {
+                        cmd = "start ccalc_graph3d.exe \"" + gcmd.expr + "\"";
+                        std::cout << T("3D Graph: z = ", "3D绘图: z = ") << gcmd.expr << std::endl;
                     }
                     std::system(cmd.c_str());
                     continue;

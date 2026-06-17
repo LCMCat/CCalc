@@ -3,12 +3,21 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
-
+#include <cmath>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 static std::vector<std::complex<double>> solve_quad_d(double a, double b, double c) {
+    // Handle degenerate case: a = 0 (linear equation)
+    if (fabs(a) < 1e-15) {
+        if (fabs(b) < 1e-15) {
+            // No solution or infinite solutions
+            return {};
+        }
+        // Linear equation: bx + c = 0
+        return {{-c / b}};
+    }
     double D = b * b - 4 * a * c;
     if (D >= 0) {
         double sq = sqrt(D);
@@ -28,6 +37,7 @@ static std::vector<std::complex<double>> solve_cubic_d(double a, double b, doubl
 
 Value Evaluator::eval_matrix(const std::vector<ASTPtr>& args) {
     if (args.empty()) return Value::make_error("matrix requires arguments");
+    if (!args[0]) return Value::make_error("matrix: null argument");
     Value v = eval_node(args[0]);
     if (v.is_matrix()) return v;
     return Value::make_error("matrix: expected matrix literal or argument");
@@ -133,13 +143,14 @@ Value Evaluator::eval_eigen(const Value& m) {
     for (auto& r : roots) {
         if (!first) result += ", ";
         first = false;
+        std::ostringstream oss;
+        oss << std::setprecision(6);
         if (fabs(r.imag()) < 1e-10) {
-            char buf[64]; snprintf(buf, sizeof(buf), "%.6g", r.real());
-            result += buf;
+            oss << r.real();
         } else {
-            char buf[128]; snprintf(buf, sizeof(buf), "%.6g%+.6gi", r.real(), r.imag());
-            result += buf;
+            oss << r.real() << std::showpos << r.imag() << "i";
         }
+        result += oss.str();
     }
     return Value::make_string(result);
 }
@@ -167,7 +178,11 @@ Value Evaluator::eval_transpose(const Value& m) {
 }
 
 Value Evaluator::eval_identity(const Value& n) {
-    int size = (int)val_to_double(n);
+    double size_d = val_to_double(n);
+    // Handle NaN or Inf input
+    if (std::isnan(size_d) || std::isinf(size_d))
+        return Value::make_error("identity: invalid input (NaN or Inf)");
+    int size = (int)size_d;
     if (size <= 0 || size > 100) return Value::make_error("identity: invalid size");
     std::vector<std::vector<Value>> result;
     for (int i = 0; i < size; i++) {
@@ -283,6 +298,30 @@ static ASTPtr simplify_ast(ASTPtr node) {
         if (is_num_zero(l) && node->op == '+') return r;
         if (is_num_zero(r) && node->op == '+') return l;
         if (is_num_zero(r) && node->op == '-') return l;
+        if (ast_equal(l, r) && node->op == '+') {
+            return simplify_ast(ASTNode::make_binop('*', ASTNode::make_num(BigRat(2)), l));
+        }
+        if (node->op == '+' && l->type == ASTNode::BINOP && l->op == '*' && l->left->type == ASTNode::NUMBER && ast_equal(l->right, r)) {
+            return simplify_ast(ASTNode::make_binop('*', ASTNode::make_num(l->left->number + BigRat(1)), r));
+        }
+        if (node->op == '+' && r->type == ASTNode::BINOP && r->op == '*' && r->left->type == ASTNode::NUMBER && ast_equal(r->right, l)) {
+            return simplify_ast(ASTNode::make_binop('*', ASTNode::make_num(r->left->number + BigRat(1)), l));
+        }
+        if (node->op == '+' && l->type == ASTNode::BINOP && l->op == '*' && l->left->type == ASTNode::NUMBER
+            && r->type == ASTNode::BINOP && r->op == '*' && r->left->type == ASTNode::NUMBER && ast_equal(l->right, r->right)) {
+            return simplify_ast(ASTNode::make_binop('*', ASTNode::make_num(l->left->number + r->left->number), l->right));
+        }
+        if (node->op == '-' && l->type == ASTNode::BINOP && l->op == '*' && l->left->type == ASTNode::NUMBER
+            && r->type == ASTNode::BINOP && r->op == '*' && r->left->type == ASTNode::NUMBER && ast_equal(l->right, r->right)) {
+            return simplify_ast(ASTNode::make_binop('*', ASTNode::make_num(l->left->number - r->left->number), l->right));
+        }
+        if (node->op == '-' && ast_equal(l, r)) return ASTNode::make_num(BigRat(0));
+        if (node->op == '-' && l->type == ASTNode::BINOP && l->op == '*' && l->left->type == ASTNode::NUMBER && ast_equal(l->right, r)) {
+            return simplify_ast(ASTNode::make_binop('*', ASTNode::make_num(l->left->number - BigRat(1)), r));
+        }
+        if (node->op == '-' && r->type == ASTNode::BINOP && r->op == '*' && r->left->type == ASTNode::NUMBER && ast_equal(r->right, l)) {
+            return simplify_ast(ASTNode::make_binop('*', ASTNode::make_num(BigRat(1) - r->left->number), l));
+        }
         if (is_num_zero(l) && node->op == '-') {
             if (r->type == ASTNode::UNARYOP && r->op == '-')
                 return r->left;
@@ -300,11 +339,35 @@ static ASTPtr simplify_ast(ASTPtr node) {
         }
         if (is_num_one(r) && node->op == '/') return l;
         if (is_num_zero(l) && node->op == '/') return ASTNode::make_num(BigRat(0));
+        if (node->op == '*' && r->type == ASTNode::NUMBER && l->type != ASTNode::NUMBER) {
+            return simplify_ast(ASTNode::make_binop('*', r, l));
+        }
         if (ast_equal(l, r) && node->op == '-') return ASTNode::make_num(BigRat(0));
         if (ast_equal(l, r) && node->op == '/') return ASTNode::make_num(BigRat(1));
         if (is_num_zero(r) && node->op == '^') return ASTNode::make_num(BigRat(1));
         if (is_num_one(r) && node->op == '^') return l;
         if (is_num_zero(l) && node->op == '^') return ASTNode::make_num(BigRat(0));
+        if (node->op == '*' && ast_equal(l, r)) {
+            return simplify_ast(ASTNode::make_binop('^', l, ASTNode::make_num(BigRat(2))));
+        }
+        if (node->op == '*' && r->type == ASTNode::BINOP && r->op == '^' && ast_equal(l, r->left)) {
+            return simplify_ast(ASTNode::make_binop('^', l, simplify_ast(ASTNode::make_binop('+', r->right, ASTNode::make_num(BigRat(1))))));
+        }
+        if (node->op == '*' && l->type == ASTNode::BINOP && l->op == '^' && ast_equal(l->left, r)) {
+            return simplify_ast(ASTNode::make_binop('^', r, simplify_ast(ASTNode::make_binop('+', l->right, ASTNode::make_num(BigRat(1))))));
+        }
+        if (node->op == '*' && l->type == ASTNode::BINOP && l->op == '^' && r->type == ASTNode::BINOP && r->op == '^' && ast_equal(l->left, r->left)) {
+            return simplify_ast(ASTNode::make_binop('^', l->left, simplify_ast(ASTNode::make_binop('+', l->right, r->right))));
+        }
+        if (node->op == '^' && l->type == ASTNode::BINOP && l->op == '^') {
+            return simplify_ast(ASTNode::make_binop('^', l->left, simplify_ast(ASTNode::make_binop('*', l->right, r))));
+        }
+        if (node->op == '*' && r->type == ASTNode::UNARYOP && r->op == '-') {
+            return simplify_ast(ASTNode::make_unaryop('-', ASTNode::make_binop('*', l, r->left)));
+        }
+        if (node->op == '*' && l->type == ASTNode::UNARYOP && l->op == '-') {
+            return simplify_ast(ASTNode::make_unaryop('-', ASTNode::make_binop('*', l->left, r)));
+        }
         if (l->type == ASTNode::NUMBER && r->type == ASTNode::NUMBER) {
             if (node->op == '+') return ASTNode::make_num(l->number + r->number);
             if (node->op == '-') return ASTNode::make_num(l->number - r->number);
@@ -334,6 +397,37 @@ static ASTPtr simplify_ast(ASTPtr node) {
                     return simplify_ast(ASTNode::make_binop('*', coeff, l->right));
                 }
             }
+            if (l->type == ASTNode::NUMBER && r->type == ASTNode::BINOP && r->op == '/') {
+                if (r->left->type == ASTNode::NUMBER) {
+                    auto coeff = ASTNode::make_num(l->number / r->left->number);
+                    return simplify_ast(ASTNode::make_binop('*', coeff, r->right));
+                }
+                auto num = simplify_ast(ASTNode::make_binop('*', l, r->left));
+                return simplify_ast(ASTNode::make_binop('/', num, r->right));
+            }
+            if (r->type == ASTNode::NUMBER && l->type == ASTNode::BINOP && l->op == '/') {
+                if (l->left->type == ASTNode::NUMBER) {
+                    auto coeff = ASTNode::make_num(r->number * l->left->number);
+                    return simplify_ast(ASTNode::make_binop('/', coeff, l->right));
+                }
+                auto num = simplify_ast(ASTNode::make_binop('*', r, l->left));
+                return simplify_ast(ASTNode::make_binop('/', num, l->right));
+            }
+        }
+        if (node->op == '/' && l->type == ASTNode::BINOP && l->op == '/') {
+            return simplify_ast(ASTNode::make_binop('/', l->left, simplify_ast(ASTNode::make_binop('*', l->right, r))));
+        }
+        if (node->op == '/' && r->type == ASTNode::BINOP && r->op == '/') {
+            return simplify_ast(ASTNode::make_binop('/', simplify_ast(ASTNode::make_binop('*', l, r->right)), r->left));
+        }
+        if (node->op == '/' && l->type == ASTNode::BINOP && l->op == '*' && l->left->type == ASTNode::NUMBER && r->type == ASTNode::NUMBER) {
+            BigRat coeff = l->left->number / r->number;
+            if (coeff == BigRat(1)) return simplify_ast(l->right);
+            if (coeff == BigRat(-1)) return ASTNode::make_unaryop('-', simplify_ast(l->right));
+            return simplify_ast(ASTNode::make_binop('*', ASTNode::make_num(coeff), l->right));
+        }
+        if (node->op == '/' && l->type == ASTNode::BINOP && l->op == '*' && r->type == ASTNode::NUMBER) {
+            return simplify_ast(ASTNode::make_binop('*', l->left, simplify_ast(ASTNode::make_binop('/', l->right, r))));
         }
         if (node->op == '-' && r->type == ASTNode::UNARYOP && r->op == '-') {
             return simplify_ast(ASTNode::make_binop('+', l, r->left));
@@ -415,8 +509,17 @@ static std::string ast_to_string(ASTPtr node) {
         }
         return l + "?" + r;
     }
-    case ASTNode::UNARYOP:
+    case ASTNode::UNARYOP: {
+        if (node->op == '-') {
+            auto child = node->left;
+            if (child && (child->type == ASTNode::FUNCTION || child->type == ASTNode::VARIABLE || child->type == ASTNode::CONSTANT || child->type == ASTNode::NUMBER))
+                return "-" + ast_to_string(child);
+            if (child && child->type == ASTNode::BINOP && ast_prec(child) >= 2)
+                return "-" + ast_to_string(child);
+            return "-(" + ast_to_string(child) + ")";
+        }
         return "-(" + ast_to_string(node->left) + ")";
+    }
     case ASTNode::FUNCTION: {
         std::string r = node->name + "(";
         for (size_t i = 0; i < node->args.size(); i++) {
@@ -757,6 +860,262 @@ Value Evaluator::eval_inttable(ASTPtr node) {
     return Value::make_string("No known antiderivative for " + ast_to_string(expr));
 }
 
+Value Evaluator::eval_expand(ASTPtr node) {
+    if (node->args.size() != 1)
+        return Value::make_error("expand(expr) requires 1 argument");
+    auto expr = node->args[0];
+
+    std::function<ASTPtr(ASTPtr)> expand_ast = [&expand_ast](ASTPtr e) -> ASTPtr {
+        if (!e) return e;
+        if (e->type == ASTNode::NUMBER || e->type == ASTNode::VARIABLE || e->type == ASTNode::CONSTANT)
+            return e;
+        if (e->type == ASTNode::UNARYOP) {
+            return ASTNode::make_unaryop(e->op, expand_ast(e->left));
+        }
+        if (e->type == ASTNode::FUNCTION) {
+            std::vector<ASTPtr> new_args;
+            for (auto& a : e->args) new_args.push_back(expand_ast(a));
+            return ASTNode::make_func(e->name, new_args);
+        }
+        if (e->type == ASTNode::BINOP) {
+            auto l = expand_ast(e->left);
+            auto r = expand_ast(e->right);
+            if (e->op == '^') {
+                if (r->type == ASTNode::NUMBER && r->number.denominator() == BigInt(1)) {
+                    long long n = r->number.numerator().to_int64();
+                    if (n >= 2 && n <= 20 && (l->type == ASTNode::BINOP && (l->op == '+' || l->op == '-'))) {
+                        ASTPtr base = l;
+                        ASTPtr result = ASTNode::make_num(BigRat(1));
+                        for (long long i = 0; i < n; i++) {
+                            result = expand_ast(ASTNode::make_binop('*', result, base));
+                        }
+                        return result;
+                    }
+                }
+                return ASTNode::make_binop('^', l, r);
+            }
+            if (e->op == '*') {
+                if (l->type == ASTNode::BINOP && (l->op == '+' || l->op == '-')) {
+                    ASTPtr ll = expand_ast(ASTNode::make_binop('*', l->left, r));
+                    ASTPtr lr = expand_ast(ASTNode::make_binop('*', l->right, r));
+                    return ASTNode::make_binop(l->op, ll, lr);
+                }
+                if (r->type == ASTNode::BINOP && (r->op == '+' || r->op == '-')) {
+                    ASTPtr rl = expand_ast(ASTNode::make_binop('*', l, r->left));
+                    ASTPtr rr = expand_ast(ASTNode::make_binop('*', l, r->right));
+                    return ASTNode::make_binop(r->op, rl, rr);
+                }
+                if (l->type == ASTNode::UNARYOP && l->op == '-') {
+                    return ASTNode::make_unaryop('-', expand_ast(ASTNode::make_binop('*', l->left, r)));
+                }
+                if (r->type == ASTNode::UNARYOP && r->op == '-') {
+                    return ASTNode::make_unaryop('-', expand_ast(ASTNode::make_binop('*', l, r->left)));
+                }
+                return ASTNode::make_binop('*', l, r);
+            }
+            return ASTNode::make_binop(e->op, l, r);
+        }
+        return e;
+    };
+
+    std::function<void(ASTPtr, std::map<std::string, BigRat>&)> collect_terms =
+        [&collect_terms](ASTPtr e, std::map<std::string, BigRat>& terms) {
+        if (!e) return;
+        if (e->type == ASTNode::BINOP && e->op == '+') {
+            collect_terms(e->left, terms);
+            collect_terms(e->right, terms);
+            return;
+        }
+        if (e->type == ASTNode::BINOP && e->op == '-') {
+            collect_terms(e->left, terms);
+            std::map<std::string, BigRat> neg_terms;
+            collect_terms(e->right, neg_terms);
+            for (auto& [k, v] : neg_terms) terms[k] -= v;
+            return;
+        }
+        if (e->type == ASTNode::UNARYOP && e->op == '-') {
+            std::map<std::string, BigRat> neg_terms;
+            collect_terms(e->left, neg_terms);
+            for (auto& [k, v] : neg_terms) terms[k] -= v;
+            return;
+        }
+        std::string key = ast_to_string(simplify_ast(e));
+        BigRat coeff(1);
+        if (e->type == ASTNode::BINOP && e->op == '*' && e->left->type == ASTNode::NUMBER) {
+            coeff = e->left->number;
+            key = ast_to_string(simplify_ast(e->right));
+        }
+        terms[key] += coeff;
+    };
+
+    auto build_from_terms = [](const std::map<std::string, BigRat>& terms) -> ASTPtr {
+        ASTPtr result;
+        for (auto& [key, coeff] : terms) {
+            if (coeff == BigRat(0)) continue;
+            ASTPtr term;
+            if (key == "1" || key.empty()) {
+                term = ASTNode::make_num(coeff);
+            } else if (coeff == BigRat(1)) {
+                term = ASTNode::make_var(key);
+            } else if (coeff == BigRat(-1)) {
+                term = ASTNode::make_unaryop('-', ASTNode::make_var(key));
+            } else {
+                term = ASTNode::make_binop('*', ASTNode::make_num(coeff), ASTNode::make_var(key));
+            }
+            if (!result) {
+                result = term;
+            } else {
+                if (term->type == ASTNode::UNARYOP && term->op == '-') {
+                    result = ASTNode::make_binop('-', result, term->left);
+                } else if (term->type == ASTNode::BINOP && term->op == '*' && term->left->type == ASTNode::NUMBER && term->left->number < BigRat(0)) {
+                    auto pos_coeff = ASTNode::make_num(-term->left->number);
+                    result = ASTNode::make_binop('-', result, ASTNode::make_binop('*', pos_coeff, term->right));
+                } else {
+                    result = ASTNode::make_binop('+', result, term);
+                }
+            }
+        }
+        return result ? result : ASTNode::make_num(BigRat(0));
+    };
+
+    ASTPtr expanded = expand_ast(expr);
+    expanded = simplify_ast(expanded);
+    std::map<std::string, BigRat> terms;
+    collect_terms(expanded, terms);
+    ASTPtr result = build_from_terms(terms);
+    result = simplify_ast(result);
+    return Value::make_string(ast_to_string(result));
+}
+
+Value Evaluator::eval_triangle_area(ASTPtr node) {
+    if (node->args.size() != 3)
+        return Value::make_error("triangle_area(a, b, c) requires 3 arguments");
+    auto va = eval_node(node->args[0]);
+    auto vb = eval_node(node->args[1]);
+    auto vc = eval_node(node->args[2]);
+    if (va.is_error()) return va;
+    if (vb.is_error()) return vb;
+    if (vc.is_error()) return vc;
+    if (!va.is_rational() || !vb.is_rational() || !vc.is_rational())
+        return Value::make_error("triangle_area arguments must be numbers");
+    double a = val_to_double(va), b = val_to_double(vb), c = val_to_double(vc);
+    if (a <= 0 || b <= 0 || c <= 0)
+        return Value::make_error("Side lengths must be positive");
+    if (a + b <= c || a + c <= b || b + c <= a)
+        return Value::make_error("Invalid triangle: sum of any two sides must exceed the third");
+    double s = (a + b + c) / 2.0;
+    double area = std::sqrt(s * (s - a) * (s - b) * (s - c));
+    return Value(BigFloat(area));
+}
+
+Value Evaluator::eval_polygon_area(ASTPtr node) {
+    if (node->args.size() != 1)
+        return Value::make_error("polygon_area(points) requires 1 argument (list of points)");
+    auto pts_val = eval_node(node->args[0]);
+    if (pts_val.is_error()) return pts_val;
+    if (!pts_val.is_matrix())
+        return Value::make_error("polygon_area argument must be a list of points");
+    const auto& m = pts_val.mat;
+    int n = (int)m.size();
+    if (n < 3)
+        return Value::make_error("Polygon must have at least 3 vertices");
+    for (int i = 0; i < n; i++) {
+        if (m[i].size() != 2)
+            return Value::make_error("Each point must have 2 coordinates");
+    }
+    double area = 0.0;
+    for (int i = 0; i < n; i++) {
+        int j = (i + 1) % n;
+        double xi = val_to_double(m[i][0]), yi = val_to_double(m[i][1]);
+        double xj = val_to_double(m[j][0]), yj = val_to_double(m[j][1]);
+        area += xi * yj - xj * yi;
+    }
+    area = std::abs(area) / 2.0;
+    return Value(BigFloat(area));
+}
+
+Value Evaluator::eval_distance(ASTPtr node) {
+    if (node->args.size() != 2)
+        return Value::make_error("distance(p1, p2) requires 2 arguments");
+    auto v1 = eval_node(node->args[0]);
+    auto v2 = eval_node(node->args[1]);
+    if (v1.is_error()) return v1;
+    if (v2.is_error()) return v2;
+    auto get_coords = [](const Value& v) -> std::vector<double> {
+        std::vector<double> result;
+        if (v.is_matrix()) {
+            if (v.mat.size() == 1) {
+                for (auto& c : v.mat[0]) result.push_back(val_to_double(c));
+            } else {
+                for (auto& row : v.mat) {
+                    if (row.size() == 1) result.push_back(val_to_double(row[0]));
+                }
+            }
+        } else if (v.is_vector()) {
+            for (auto& c : v.vec) result.push_back(val_to_double(c));
+        } else {
+            result.push_back(val_to_double(v));
+        }
+        return result;
+    };
+    auto c1 = get_coords(v1);
+    auto c2 = get_coords(v2);
+    if (c1.size() != c2.size())
+        return Value::make_error("Points must have same dimension");
+    double sum = 0.0;
+    for (size_t i = 0; i < c1.size(); i++) {
+        double d = c1[i] - c2[i];
+        sum += d * d;
+    }
+    return Value(BigFloat(std::sqrt(sum)));
+}
+
+Value Evaluator::eval_line_intersect(ASTPtr node) {
+    if (node->args.size() != 2)
+        return Value::make_error("line_intersect(line1, line2) requires 2 arguments");
+    auto e1 = node->args[0];
+    auto e2 = node->args[1];
+    auto extract_line = [this](ASTPtr e, double& a, double& b, double& c) -> bool {
+        if (e->type != ASTNode::BINOP || e->op != '=') return false;
+        auto lhs = e->left, rhs = e->right;
+        ASTPtr y_side = nullptr, expr_side = nullptr;
+        if (lhs->type == ASTNode::VARIABLE && lhs->name == "y") {
+            y_side = lhs; expr_side = rhs;
+        } else if (rhs->type == ASTNode::VARIABLE && rhs->name == "y") {
+            y_side = rhs; expr_side = lhs;
+        }
+        if (!y_side || !expr_side) return false;
+        long long x_vals[] = {0, 1, 2};
+        double y_vals[3];
+        for (int i = 0; i < 3; i++) {
+            set_variable("x", Value(BigRat(x_vals[i])));
+            auto v = eval_node(expr_side);
+            if (v.is_error()) { return false; }
+            y_vals[i] = val_to_double(v);
+        }
+        double dy01 = y_vals[1] - y_vals[0];
+        double dy12 = y_vals[2] - y_vals[1];
+        if (std::abs(dy01 - dy12) > 1e-6) return false;
+        double slope = dy01;
+        double intercept = y_vals[0];
+        a = -slope; b = 1; c = -intercept;
+        return true;
+    };
+    double a1, b1, c1, a2, b2, c2;
+    if (!extract_line(e1, a1, b1, c1) || !extract_line(e2, a2, b2, c2)) {
+        return Value::make_error("line_intersect requires equations in y=f(x) form");
+    }
+    double det = a1 * b2 - a2 * b1;
+    if (std::abs(det) < 1e-12) {
+        return Value::make_string("Lines are parallel (no intersection)");
+    }
+    double x = (b1 * c2 - b2 * c1) / det;
+    double y = (c1 * a2 - c2 * a1) / det;
+    std::ostringstream oss;
+    oss << std::setprecision(15) << "(" << x << ", " << y << ")";
+    return Value::make_string(oss.str());
+}
+
 Value Evaluator::eval_recur(ASTPtr node) {
     if (node->args.size() != 4)
         return Value::make_error("recur(expr, var, init, n) requires 4 arguments");
@@ -1040,6 +1399,7 @@ void Evaluator::set_variable(const std::string& name, const Value& v) {
 
 Value Evaluator::get_variable(const std::string& name) const {
     if (name == "ans") return last_ans_;
+    if (name == "i") return Value::make_complex(Value(BigRat(0)), Value(BigRat(1)));
     auto it = variables_.find(name);
     if (it != variables_.end()) return it->second;
     auto vit = vec_variables_.find(name);
@@ -1062,6 +1422,8 @@ bool Evaluator::has_vec_variable(const std::string& name) const {
 }
 
 Value Evaluator::eval_node(ASTPtr node) {
+    // Null pointer check
+    if (!node) return Value::make_error("Null AST node");
     switch (node->type) {
     case ASTNode::NUMBER:
         return Value(node->number);
@@ -1124,6 +1486,48 @@ Value Evaluator::eval_binop(ASTPtr node) {
             return Value::make_error("0^0 is undefined");
         if (right.is_zero()) return Value(BigRat(1));
         if (left.is_zero()) return Value(BigRat(0));
+        // Handle complex exponentiation
+        if (left.type == Value::COMPLEX || right.type == Value::COMPLEX) {
+            // For integer exponent, use repeated multiplication
+            if (right.is_rational()) {
+                BigRat exp_r = right.to_rational();
+                if (exp_r.denominator() == BigInt(1)) {
+                    int64_t n = exp_r.numerator().to_int64();
+                    if (n >= 0 && n <= 10000) {
+                        Value result(BigRat(1));
+                        Value base = left.type == Value::COMPLEX ? left : Value::make_complex(left, Value(BigRat(0)));
+                        for (int64_t i = 0; i < n; i++) {
+                            result = result * base;
+                        }
+                        return result;
+                    }
+                    if (n < 0 && n >= -10000) {
+                        Value result(BigRat(1));
+                        Value base = left.type == Value::COMPLEX ? left : Value::make_complex(left, Value(BigRat(0)));
+                        for (int64_t i = 0; i < -n; i++) {
+                            result = result * base;
+                        }
+                        // Return 1/result (complex division)
+                        Value one(BigRat(1));
+                        return one / result;
+                    }
+                }
+            }
+            // For non-integer exponent, use polar form: z^n = r^n * e^(n*theta)
+            Value base = left.type == Value::COMPLEX ? left : Value::make_complex(left, Value(BigRat(0)));
+            Value r = base.magnitude();
+            Value theta = base.argument();
+            // Convert exponent to float for non-integer cases
+            BigFloat exp_f = right.to_float();
+            BigFloat r_f = r.to_float();
+            BigFloat theta_f = theta.to_float();
+            // r^n * cos(n*theta) + i * r^n * sin(n*theta)
+            BigFloat r_pow = BigFloat::pow_val(r_f, exp_f);
+            BigFloat new_theta = theta_f * exp_f;
+            BigFloat real_part = r_pow * BigFloat::cos_val(new_theta);
+            BigFloat imag_part = r_pow * BigFloat::sin_val(new_theta);
+            return Value::make_complex(Value(real_part), Value(imag_part));
+        }
         if (left.type == Value::SURDS && right.type == Value::SURDS) {
             if (right.surds.is_rational()) {
                 BigRat exp_r = right.surds.to_rational();
@@ -1693,6 +2097,12 @@ Value Evaluator::eval_euler_phi(const Value& v) {
         return Value::make_error("euler_phi requires positive integer");
     BigInt n = r.numerator();
     if (n == BigInt(1)) return Value(BigRat(1));
+    
+    // Check for overflow: limit to int64 range
+    static const BigInt max_int64("9223372036854775807");
+    if (n > max_int64)
+        return Value::make_error("euler_phi: number too large (exceeds int64 range)");
+    
     int64_t nv = n.to_int64();
     if (nv <= 0)
         return Value::make_error("euler_phi requires positive integer");
@@ -1706,6 +2116,27 @@ Value Evaluator::eval_euler_phi(const Value& v) {
     }
     if (temp > 1) result -= result / temp;
     return Value(BigRat(result));
+}
+
+Value Evaluator::eval_normal_pdf(const Value& x, const Value& mu, const Value& sigma) {
+    double xd = val_to_double(x);
+    double mud = val_to_double(mu);
+    double sigmad = val_to_double(sigma);
+    if (sigmad <= 0) return Value::make_error("sigma must be positive");
+    double z = (xd - mud) / sigmad;
+    double coeff = 1.0 / (sigmad * std::sqrt(2.0 * M_PI));
+    double result = coeff * std::exp(-0.5 * z * z);
+    return Value(BigFloat(std::to_string(result)));
+}
+
+Value Evaluator::eval_normal_cdf(const Value& x, const Value& mu, const Value& sigma) {
+    double xd = val_to_double(x);
+    double mud = val_to_double(mu);
+    double sigmad = val_to_double(sigma);
+    if (sigmad <= 0) return Value::make_error("sigma must be positive");
+    double z = (xd - mud) / sigmad;
+    double result = 0.5 * (1.0 + std::erf(z / std::sqrt(2.0)));
+    return Value(BigFloat(std::to_string(result)));
 }
 
 Value Evaluator::substitute(ASTPtr node, const std::string& var, const Value& val) {
@@ -1734,6 +2165,45 @@ Value Evaluator::substitute(ASTPtr node, const std::string& var, const Value& va
             if (l.is_zero() && r.is_zero()) return Value::make_error("0^0");
             if (r.is_zero()) return Value(BigRat(1));
             if (l.is_zero()) return Value(BigRat(0));
+            // Handle complex exponentiation
+            if (l.type == Value::COMPLEX || r.type == Value::COMPLEX) {
+                // For integer exponent, use repeated multiplication
+                if (r.is_rational()) {
+                    BigRat exp_r = r.to_rational();
+                    if (exp_r.denominator() == BigInt(1)) {
+                        int64_t n = exp_r.numerator().to_int64();
+                        if (n >= 0 && n <= 10000) {
+                            Value result(BigRat(1));
+                            Value base = l.type == Value::COMPLEX ? l : Value::make_complex(l, Value(BigRat(0)));
+                            for (int64_t i = 0; i < n; i++) {
+                                result = result * base;
+                            }
+                            return result;
+                        }
+                        if (n < 0 && n >= -10000) {
+                            Value result(BigRat(1));
+                            Value base = l.type == Value::COMPLEX ? l : Value::make_complex(l, Value(BigRat(0)));
+                            for (int64_t i = 0; i < -n; i++) {
+                                result = result * base;
+                            }
+                            Value one(BigRat(1));
+                            return one / result;
+                        }
+                    }
+                }
+                // For non-integer exponent, use polar form
+                Value base = l.type == Value::COMPLEX ? l : Value::make_complex(l, Value(BigRat(0)));
+                Value mag = base.magnitude();
+                Value arg = base.argument();
+                BigFloat exp_f = r.to_float();
+                BigFloat r_f = mag.to_float();
+                BigFloat theta_f = arg.to_float();
+                BigFloat r_pow = BigFloat::pow_val(r_f, exp_f);
+                BigFloat new_theta = theta_f * exp_f;
+                BigFloat real_part = r_pow * BigFloat::cos_val(new_theta);
+                BigFloat imag_part = r_pow * BigFloat::sin_val(new_theta);
+                return Value::make_complex(Value(real_part), Value(imag_part));
+            }
             if (r.is_rational()) {
                 BigRat exp_r = r.to_rational();
                 if (exp_r.denominator() == BigInt(1)) {
@@ -1842,8 +2312,131 @@ Value Evaluator::substitute(ASTPtr node, const std::string& var, const Value& va
 }
 
 Value Evaluator::eval_int(ASTPtr node) {
+    // 2 arguments: symbolic integration (integrate)
+    // 4 arguments: numerical definite integral
+    if (node->args.size() == 2) {
+        auto expr = node->args[0];
+        std::string var;
+        if (node->args[1]->type == ASTNode::VARIABLE) var = node->args[1]->name;
+        else return Value::make_error("Second argument of int must be a variable");
+
+        expr = simplify_ast(expr);
+
+        auto is_var = [&var](ASTPtr n) -> bool {
+            return n && n->type == ASTNode::VARIABLE && n->name == var;
+        };
+        std::function<bool(ASTPtr)> is_const =
+            [&var, &is_const](ASTPtr n) -> bool {
+            if (!n) return true;
+            if (n->type == ASTNode::VARIABLE) return n->name != var;
+            if (n->type == ASTNode::NUMBER || n->type == ASTNode::CONSTANT) return true;
+            if (n->type == ASTNode::UNARYOP) return is_const(n->left);
+            if (n->type == ASTNode::BINOP) return is_const(n->left) && is_const(n->right);
+            for (auto& a : n->args) if (!is_const(a)) return false;
+            return true;
+        };
+
+        std::function<ASTPtr(ASTPtr)> sint = [&sint, &var, &is_var, &is_const](ASTPtr e) -> ASTPtr {
+            if (!e) return e;
+            if (is_const(e)) {
+                return ASTNode::make_binop('*', e, ASTNode::make_var(var));
+            }
+            if (is_var(e)) {
+                return ASTNode::make_binop('^', ASTNode::make_var(var), ASTNode::make_num(BigRat(2)));
+            }
+            if (e->type == ASTNode::BINOP) {
+                if (e->op == '+') {
+                    return simplify_ast(ASTNode::make_binop('+', sint(e->left), sint(e->right)));
+                }
+                if (e->op == '-') {
+                    return simplify_ast(ASTNode::make_binop('-', sint(e->left), sint(e->right)));
+                }
+                if (e->op == '*') {
+                    if (is_const(e->left)) return simplify_ast(ASTNode::make_binop('*', e->left, sint(e->right)));
+                    if (is_const(e->right)) return simplify_ast(ASTNode::make_binop('*', e->left, sint(e->right)));
+                }
+                if (e->op == '^') {
+                    if (is_var(e->left) && is_const(e->right)) {
+                        if (e->right->type == ASTNode::NUMBER) {
+                            BigRat n = e->right->number;
+                            if (n == BigRat(-1)) {
+                                return ASTNode::make_func("ln", {ASTNode::make_var(var)});
+                            }
+                            BigRat np1 = n + BigRat(1);
+                            return ASTNode::make_binop('/',
+                                ASTNode::make_binop('^', ASTNode::make_var(var), ASTNode::make_num(np1)),
+                                ASTNode::make_num(np1));
+                        }
+                    }
+                    if (is_const(e->left) && is_const(e->right)) {
+                        return ASTNode::make_binop('*', e, ASTNode::make_var(var));
+                    }
+                }
+                if (e->op == '/') {
+                    if (is_const(e->left) && is_var(e->right)) {
+                        return ASTNode::make_binop('*', e->left,
+                            ASTNode::make_func("ln", {ASTNode::make_var(var)}));
+                    }
+                    if (is_const(e->right)) {
+                        return simplify_ast(ASTNode::make_binop('/', sint(e->left), e->right));
+                    }
+                }
+            }
+            if (e->type == ASTNode::UNARYOP && e->op == '-') {
+                return ASTNode::make_unaryop('-', sint(e->left));
+            }
+            if (e->type == ASTNode::FUNCTION) {
+                if (e->args.size() == 1) {
+                    auto& arg = e->args[0];
+                    if (is_var(arg)) {
+                        if (e->name == "sin") return ASTNode::make_unaryop('-', ASTNode::make_func("cos", {ASTNode::make_var(var)}));
+                        if (e->name == "cos") return ASTNode::make_func("sin", {ASTNode::make_var(var)});
+                        if (e->name == "exp") return ASTNode::make_func("exp", {ASTNode::make_var(var)});
+                        if (e->name == "tan") return ASTNode::make_func("ln", {ASTNode::make_func("cos", {ASTNode::make_var(var)})});
+                        if (e->name == "ln" || e->name == "log") {
+                            return ASTNode::make_binop('-',
+                                ASTNode::make_binop('*', ASTNode::make_var(var), ASTNode::make_func("ln", {ASTNode::make_var(var)})),
+                                ASTNode::make_var(var));
+                        }
+                        if (e->name == "sqrt") {
+                            return ASTNode::make_binop('/',
+                                ASTNode::make_binop('^', ASTNode::make_var(var), ASTNode::make_num(BigRat(3,2))),
+                                ASTNode::make_num(BigRat(3,2)));
+                        }
+                    }
+                    if (arg->type == ASTNode::BINOP && arg->op == '*' && is_const(arg->left) && is_var(arg->right)) {
+                        BigRat coeff = arg->left->number;
+                        BigRat inv_coeff = BigRat(1) / coeff;
+                        auto inner_var = ASTNode::make_var(var);
+                        if (e->name == "sin") {
+                            return ASTNode::make_binop('*', ASTNode::make_num(inv_coeff),
+                                ASTNode::make_unaryop('-', ASTNode::make_func("cos", {arg})));
+                        }
+                        if (e->name == "cos") {
+                            return ASTNode::make_binop('*', ASTNode::make_num(inv_coeff),
+                                ASTNode::make_func("sin", {arg}));
+                        }
+                        if (e->name == "exp") {
+                            return ASTNode::make_binop('*', ASTNode::make_num(inv_coeff),
+                                ASTNode::make_func("exp", {arg}));
+                        }
+                    }
+                }
+            }
+            return nullptr;
+        };
+
+        ASTPtr result = sint(expr);
+        if (result) {
+            result = simplify_ast(result);
+            return Value::make_string(ast_to_string(result) + " + C");
+        }
+        return Value::make_string("Cannot find antiderivative of " + ast_to_string(expr));
+    }
+    
+    // 4 arguments: numerical definite integral
     if (node->args.size() != 4)
-        return Value::make_error("int(expr, var, a, b) requires 4 arguments");
+        return Value::make_error("int(expr, var) or int(expr, var, a, b) required");
     auto expr = node->args[0];
     std::string var;
     if (node->args[1]->type == ASTNode::VARIABLE) var = node->args[1]->name;
@@ -1854,7 +2447,7 @@ Value Evaluator::eval_int(ASTPtr node) {
     if (b_val.is_error()) return b_val;
     BigFloat a = a_val.to_float();
     BigFloat b = b_val.to_float();
-    int n = 1000;
+    int n = g_integral_steps;  // Use configurable step count
     BigFloat h = (b - a) / BigFloat(n);
     BigFloat sum(0);
     BigFloat fa = substitute(expr, var, Value(a)).to_float();
@@ -2277,10 +2870,18 @@ Value Evaluator::eval_function(ASTPtr node) {
         if (args.size() != 1) return Value::make_error("euler_phi requires 1 argument");
         return eval_euler_phi(eval_node(args[0]));
     }
+    if (name == "normal_pdf") {
+        if (args.size() != 3) return Value::make_error("normal_pdf(x, mu, sigma) requires 3 arguments");
+        return eval_normal_pdf(eval_node(args[0]), eval_node(args[1]), eval_node(args[2]));
+    }
+    if (name == "normal_cdf") {
+        if (args.size() != 3) return Value::make_error("normal_cdf(x, mu, sigma) requires 3 arguments");
+        return eval_normal_cdf(eval_node(args[0]), eval_node(args[1]), eval_node(args[2]));
+    }
     if (name == "int") {
         return eval_int(node);
     }
-    if (name == "diff") {
+    if (name == "diff" || name == "partial") {
         return eval_diff(node);
     }
     if (name == "sum") {
@@ -2545,6 +3146,24 @@ Value Evaluator::eval_function(ASTPtr node) {
     }
     if (name == "inttable") {
         return eval_inttable(node);
+    }
+    if (name == "integrate") {
+        return eval_int(node);
+    }
+    if (name == "expand") {
+        return eval_expand(node);
+    }
+    if (name == "triangle_area") {
+        return eval_triangle_area(node);
+    }
+    if (name == "polygon_area") {
+        return eval_polygon_area(node);
+    }
+    if (name == "distance") {
+        return eval_distance(node);
+    }
+    if (name == "line_intersect") {
+        return eval_line_intersect(node);
     }
     if (name == "recur") {
         return eval_recur(node);
@@ -2828,7 +3447,11 @@ Value Evaluator::eval_solve(const std::vector<ASTPtr>& args) {
     for (auto& arg : args) {
         Value v = eval_node(arg);
         if (v.is_error()) return v;
-        coeffs.push_back(std::stod(v.to_string()));
+        // Use val_to_double which handles exceptions, then check for NaN/Inf
+        double d = val_to_double(v);
+        if (std::isnan(d) || std::isinf(d))
+            return Value::make_error("solve: coefficient is not a valid number");
+        coeffs.push_back(d);
     }
 
     if (n == 4) {
